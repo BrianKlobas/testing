@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+
+import argparse
+import urllib.parse
+import boto3
+from datetime import datetime
+
+
+# ==========================================================
+# Configuration
+# ==========================================================
+
+ROLE_NAME = "OrganizationAccountAccessRole"
+
+OUTPUT_FILE = "aws_org_account_inventory.md"
+
+
+# ==========================================================
+# AWS Session
+# ==========================================================
+
+# Uses default AWS credentials/profile
+session = boto3.Session()
+
+org = session.client("organizations")
+
+
+# ==========================================================
+# Organization Functions
+# ==========================================================
+
+def get_root_id():
+
+    return org.list_roots()["Roots"][0]["Id"]
+
+
+
+def list_ous(parent_id):
+
+    paginator = org.get_paginator(
+        "list_organizational_units_for_parent"
+    )
+
+    ous = []
+
+    for page in paginator.paginate(
+        ParentId=parent_id
+    ):
+        ous.extend(
+            page["OrganizationalUnits"]
+        )
+
+    return ous
+
+
+
+def list_accounts(parent_id):
+
+    paginator = org.get_paginator(
+        "list_accounts_for_parent"
+    )
+
+    accounts = []
+
+    for page in paginator.paginate(
+        ParentId=parent_id
+    ):
+        accounts.extend(
+            page["Accounts"]
+        )
+
+    return accounts
+
+
+
+# ==========================================================
+# Recursive OU Traversal
+# ==========================================================
+
+rows = []
+
+
+def walk(parent_id, path):
+
+    for acct in list_accounts(parent_id):
+
+        switch_url = (
+            "https://signin.aws.amazon.com/switchrole?"
+            f"account={acct['Id']}"
+            f"&roleName={urllib.parse.quote(ROLE_NAME)}"
+            f"&displayName={urllib.parse.quote(acct['Name'])}"
+        )
+
+        rows.append(
+            {
+                "ou": path,
+                "name": acct["Name"],
+                "id": acct["Id"],
+                "url": switch_url,
+            }
+        )
+
+
+    for ou in list_ous(parent_id):
+
+        walk(
+            ou["Id"],
+            f"{path}/{ou['Name']}"
+        )
+
+
+
+# ==========================================================
+# Markdown Output
+# ==========================================================
+
+walk(
+    get_root_id(),
+    "Root"
+)
+
+
+rows.sort(
+    key=lambda x: (
+        x["ou"],
+        x["name"]
+    )
+)
+
+
+with open(
+    OUTPUT_FILE,
+    "w",
+    encoding="utf-8"
+) as f:
+
+
+    f.write(
+        "# AWS Organization Account Inventory\n\n"
+    )
+
+    f.write(
+        f"Generated: {datetime.utcnow().isoformat()} UTC\n\n"
+    )
+
+    f.write(
+        f"**Total Accounts:** {len(rows)}\n\n"
+    )
+
+    f.write(
+        "---\n\n"
+    )
+
+
+    current_ou = None
+
+
+    for account in rows:
+
+
+        if account["ou"] != current_ou:
+
+            current_ou = account["ou"]
+
+            f.write(
+                f"\n## {current_ou}\n\n"
+            )
+
+
+        f.write(
+            f"### {account['name']}\n\n"
+        )
+
+        f.write(
+            f"**Account ID:** `{account['id']}`  \n"
+        )
+
+        f.write(
+            f"**Switch Role:** "
+            f"[Open AWS Console]({account['url']})\n\n"
+        )
+
+        f.write(
+            "---\n\n"
+        )
+
+
+print(
+    f"Created Teams-friendly report: {OUTPUT_FILE}"
+)
