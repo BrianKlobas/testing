@@ -1,16 +1,14 @@
 <!DOCTYPE html>
 <html>
-
 <head>
-
-<title>AWS Security Asset Explorer</title>
+<title>AWS Security Asset Explorer Demo</title>
 
 <style>
 
 body {
     font-family: Arial, Helvetica, sans-serif;
-    background:#f3f5f7;
-    margin:40px;
+    background:#f4f6f8;
+    margin:30px;
     color:#222;
 }
 
@@ -21,18 +19,12 @@ body {
     border-radius:10px;
 }
 
-.header h1 {
-    margin:0;
-}
-
-
-.search-box {
+.search {
     margin-top:20px;
     background:white;
-    padding:25px;
+    padding:20px;
     border-radius:10px;
 }
-
 
 input {
     width:500px;
@@ -40,128 +32,87 @@ input {
     font-size:16px;
 }
 
-
 button {
-
     padding:12px 20px;
     background:#146eb4;
     color:white;
     border:none;
     border-radius:5px;
     cursor:pointer;
-
 }
 
-
 .card {
-
     margin-top:20px;
     background:white;
     padding:25px;
     border-radius:10px;
-    box-shadow:0 2px 5px #ccc;
-
+    box-shadow:0 2px 6px #ccc;
 }
 
-
-.section-title {
-
+.title {
     font-size:22px;
     font-weight:bold;
     margin-bottom:15px;
-
 }
-
 
 .grid {
-
     display:grid;
     grid-template-columns:220px auto;
-    gap:12px;
-
+    gap:10px;
 }
-
 
 .label {
-
     font-weight:bold;
     color:#555;
-
 }
 
-
 .code {
-
     font-family:monospace;
     background:#eee;
     padding:3px;
-
 }
 
-
-.badge {
-
+.tag {
     display:inline-block;
+    padding:6px 12px;
+    margin:4px;
     background:#e7f3ff;
     color:#146eb4;
-    padding:6px 12px;
-    border-radius:15px;
-    margin:4px;
-
+    border-radius:20px;
 }
-
-
-.sg {
-
-    border-left:5px solid #146eb4;
-    padding-left:15px;
-    margin-top:20px;
-
-}
-
-
-.firewall {
-
-    border-left:5px solid #d9534f;
-    padding-left:15px;
-    margin-top:20px;
-
-}
-
 
 table {
-
     width:100%;
     border-collapse:collapse;
     margin-top:15px;
-
 }
 
-
 th {
-
     background:#232f3e;
     color:white;
     padding:10px;
-    text-align:left;
-
 }
-
 
 td {
-
     padding:10px;
     border-bottom:1px solid #ddd;
-
 }
 
+.firewall {
+    border-left:5px solid #c0392b;
+    padding-left:15px;
+    margin-top:20px;
+}
+
+.sg {
+    border-left:5px solid #146eb4;
+    padding-left:15px;
+    margin-top:20px;
+}
 
 .hidden {
-
     display:none;
-
 }
-
 
 </style>
 
@@ -170,23 +121,16 @@ td {
 
 function lookup(){
 
-document.getElementById(
-"results"
-).classList.remove(
-"hidden"
-);
+document.getElementById("results")
+.classList.remove("hidden");
 
-document.getElementById(
-"query"
-).innerHTML =
-document.getElementById(
-"search"
-).value;
+document.getElementById("searched")
+.innerHTML =
+document.getElementById("query").value;
 
 }
 
 </script>
-
 
 </head>
 
@@ -196,77 +140,177 @@ document.getElementById(
 
 <div class="header">
 
-<h1>
-AWS Security Asset Explorer
-</h1>
+<h1>AWS Security Asset Explorer</h1>
 
 <p>
-Unified AWS + Palo Alto security context lookup
+Unified AWS + DNS + Palo Alto Security Context
 </p>
 
 </div>
 
 
 
+<div class="search">
 
-<div class="search-box">
+<h2>Asset Lookup</h2>
 
-
-<h2>
-Search Asset
-</h2>
-
-
-<input
-id="search"
-placeholder="IP, ENI, hostname, instance ID"
-/>
-
+<input id="query"
+placeholder="Example: app1.company.com or 10.20.15.44">
 
 <button onclick="lookup()">
-Lookup
+Search
 </button>
 
-
 </div>
-
-
 
 
 
 <div id="results" class="hidden">
 
 
-
 <div class="card">
 
+<div class="title">
+Search Result
+</div>
 
-<div class="section-title">
-Asset Overview
+Searching:
+
+<b id="searched"></b>
+
 </div>
 
 
-Query:
 
-<span class="badge" id="query"></span>
+<div class="card">
 
-
-<br><br>
+<div class="title">
+DNS Resolution Context
+</div>
 
 
 <div class="grid">
 
 
 <div class="label">
-Account
+DNS Name
+</div>
+
+<div class="code">
+app1.company.com
+</div>
+
+
+<div class="label">
+Record Type
+</div>
+
+<div>
+A + CNAME
+</div>
+
+
+<div class="label">
+A Record
+</div>
+
+<div class="code">
+10.20.15.44
+</div>
+
+
+<div class="label">
+CNAME
+</div>
+
+<div class="code">
+app1-prod-alb.us-west-2.elb.amazonaws.com
+</div>
+
+
+<div class="label">
+DNS Provider
+</div>
+
+<div>
+Infoblox Corporate DNS
+</div>
+
+
+<div class="label">
+TTL
+</div>
+
+<div>
+300 seconds
+</div>
+
+
+</div>
+
+</div>
+
+
+
+
+
+<div class="card">
+
+<div class="title">
+Ownership / Application Metadata
+</div>
+
+
+<span class="tag">
+Owner: Payments Team
+</span>
+
+
+<span class="tag">
+Application: Customer Portal
+</span>
+
+
+<span class="tag">
+Environment: Production
+</span>
+
+
+<span class="tag">
+Purpose: Web Tier
+</span>
+
+
+<span class="tag">
+Cost Center: 44521
+</span>
+
+
+</div>
+
+
+
+
+
+
+<div class="card">
+
+<div class="title">
+AWS Resource Mapping
+</div>
+
+
+<div class="grid">
+
+
+<div class="label">
+AWS Account
 </div>
 
 <div>
 app1-prod
 <br>
-<span class="code">
 123456789012
-</span>
 </div>
 
 
@@ -280,31 +324,33 @@ us-west-2
 
 
 <div class="label">
-Resource
+VPC
 </div>
 
 <div>
-EC2 Instance
-</div>
-
-
-<div class="label">
-Instance
-</div>
-
-<div class="code">
-i-0123456789abcdef
+Prod-Core
 <br>
-app01-prod-web01
+vpc-0123456789
 </div>
 
 
 <div class="label">
-Private IP
+Subnet
 </div>
 
-<div class="code">
-10.20.15.44
+<div>
+Private-App-A
+<br>
+subnet-0123456789
+</div>
+
+
+<div class="label">
+Availability Zone
+</div>
+
+<div>
+us-west-2a
 </div>
 
 
@@ -319,45 +365,6 @@ eni-0123456789abcdef
 
 </div>
 
-</div>
-
-
-
-
-
-
-<div class="card">
-
-
-<div class="section-title">
-Ownership / Tags
-</div>
-
-
-<span class="badge">
-Owner: Payments Team
-</span>
-
-
-<span class="badge">
-Application: Customer Portal
-</span>
-
-
-<span class="badge">
-Environment: Production
-</span>
-
-
-<span class="badge">
-Purpose: Web Tier
-</span>
-
-
-<span class="badge">
-Cost Center: 45678
-</span>
-
 
 </div>
 
@@ -368,54 +375,63 @@ Cost Center: 45678
 
 <div class="card">
 
-
-<div class="section-title">
-AWS Network Context
+<div class="title">
+Compute / Database Association
 </div>
 
 
-<div class="grid">
+<table>
+
+<tr>
+<th>
+Type
+</th>
+<th>
+Name
+</th>
+<th>
+ID
+</th>
+</tr>
 
 
-<div class="label">
-VPC
+<tr>
+<td>
+EC2
+</td>
+
+<td>
+app01-prod-web01
+</td>
+
+<td>
+i-0123456789abcdef
+</td>
+
+</tr>
+
+
+<tr>
+<td>
+RDS MySQL
+</td>
+
+<td>
+customer-db-prod
+</td>
+
+<td>
+database-abc123
+</td>
+
+</tr>
+
+
+</table>
+
+
 </div>
 
-<div>
-Prod-Core
-<br>
-<span class="code">
-vpc-0123456789
-</span>
-</div>
-
-
-<div class="label">
-Subnet
-</div>
-
-<div>
-Private-App-A
-<br>
-<span class="code">
-subnet-0123456789
-</span>
-</div>
-
-
-<div class="label">
-Availability Zone
-</div>
-
-<div>
-us-west-2a
-</div>
-
-
-</div>
-
-
-</div>
 
 
 
@@ -424,8 +440,7 @@ us-west-2a
 
 <div class="card">
 
-
-<div class="section-title">
+<div class="title">
 AWS Security Groups
 </div>
 
@@ -437,10 +452,9 @@ AWS Security Groups
 sg-app-web
 </h3>
 
-
-<span class="code">
+<div class="code">
 sg-0123456789
-</span>
+</div>
 
 
 <h4>
@@ -451,52 +465,23 @@ Inbound Rules
 <table>
 
 <tr>
-<th>
-Protocol
-</th>
-
-<th>
-Port
-</th>
-
-<th>
-Source
-</th>
-
+<th>Protocol</th>
+<th>Port</th>
+<th>Source</th>
 </tr>
 
 
 <tr>
-
-<td>
-TCP
-</td>
-
-<td>
-443
-</td>
-
-<td>
-0.0.0.0/0
-</td>
-
+<td>TCP</td>
+<td>443</td>
+<td>0.0.0.0/0</td>
 </tr>
 
 
 <tr>
-
-<td>
-TCP
-</td>
-
-<td>
-22
-</td>
-
-<td>
-10.10.0.0/16
-</td>
-
+<td>TCP</td>
+<td>22</td>
+<td>10.10.0.0/16</td>
 </tr>
 
 
@@ -511,22 +496,13 @@ TCP
 <div class="sg">
 
 <h3>
-sg-app-db-access
+sg-database-access
 </h3>
-
-<span class="code">
-sg-987654321
-</span>
-
-
-<h4>
-Inbound Rules</h4>
 
 
 <table>
 
 <tr>
-
 <th>
 Protocol
 </th>
@@ -543,7 +519,6 @@ Source
 
 
 <tr>
-
 <td>
 TCP
 </td>
@@ -572,69 +547,11 @@ sg-app-web
 
 
 
-
-
 <div class="card">
 
 
-<div class="section-title">
-Associated Database
-</div>
-
-
-<table>
-
-<tr>
-
-<th>
-Type
-</th>
-
-<th>
-Name
-</th>
-
-<th>
-Endpoint
-</th>
-
-</tr>
-
-
-<tr>
-
-<td>
-RDS MySQL
-</td>
-
-<td>
-customer-db-prod
-</td>
-
-<td>
-customer-db.xxxxxx.us-west-2.rds.amazonaws.com
-</td>
-
-</tr>
-
-
-</table>
-
-
-</div>
-
-
-
-
-
-
-
-
-<div class="card">
-
-
-<div class="section-title">
-Palo Alto Panorama Match
+<div class="title">
+Palo Alto Panorama Context
 </div>
 
 
@@ -651,19 +568,13 @@ panorama-prod.company.com
 
 
 <div class="label">
-Object Match
+Address Object
 </div>
 
 <div>
-
 APP1-WEB01
-
 <br>
-
-<span class="code">
 10.20.15.44/32
-</span>
-
 </div>
 
 
@@ -672,13 +583,9 @@ Address Groups
 </div>
 
 <div>
-
 APP1-WEB-SERVERS
-
 <br>
-
 WEB-TIER-PRODUCTION
-
 </div>
 
 
@@ -686,6 +593,7 @@ WEB-TIER-PRODUCTION
 
 
 </div>
+
 
 
 
@@ -695,7 +603,7 @@ WEB-TIER-PRODUCTION
 <div class="card">
 
 
-<div class="section-title">
+<div class="title">
 Palo Alto Security Rules
 </div>
 
@@ -705,19 +613,8 @@ Palo Alto Security Rules
 
 
 <h3>
-Firewall:
-PA-DC1-EDGE01
+Firewall: PA-DC1-EDGE01
 </h3>
-
-
-Device Group:
-
-<b>
-Production
-</b>
-
-
-<br><br>
 
 
 Rule:
@@ -729,9 +626,7 @@ ALLOW-INTERNET-HTTPS-TO-WEB
 
 <table>
 
-
 <tr>
-
 <th>
 Source
 </th>
@@ -766,9 +661,8 @@ ssl
 </td>
 
 <td>
-allow
+ALLOW
 </td>
-
 
 </tr>
 
@@ -778,11 +672,9 @@ allow
 
 <br>
 
-
 Hit Count:
-
 <b>
-124,532
+124532
 </b>
 
 
@@ -792,13 +684,11 @@ Hit Count:
 
 
 
-
 <div class="firewall">
 
 
 <h3>
-Firewall:
-PA-DC2-EDGE01
+Firewall: PA-DC2-EDGE01
 </h3>
 
 
@@ -847,7 +737,7 @@ tcp/3306
 </td>
 
 <td>
-allow
+ALLOW
 </td>
 
 
@@ -867,11 +757,9 @@ allow
 
 
 
-
 <div class="card">
 
-
-<div class="section-title">
+<div class="title">
 NAT Policy Match
 </div>
 
@@ -879,7 +767,6 @@ NAT Policy Match
 <table>
 
 <tr>
-
 <th>
 Rule
 </th>
@@ -917,6 +804,7 @@ WEB-PUBLIC-DNAT
 PA-DC1-EDGE01
 </td>
 
+
 </tr>
 
 
@@ -924,8 +812,6 @@ PA-DC1-EDGE01
 
 
 </div>
-
-
 
 
 
