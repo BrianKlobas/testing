@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+
+import ipaddress
+from openpyxl import load_workbook
+
+
+# ==========================================================
+# Configuration
+# ==========================================================
+
+EXCEL_FILE = "aws_vpc_cidr_inventory.xlsx"
+
+SHEET_NAME = "VPC CIDR Inventory"
+
+
+# ==========================================================
+# Load Inventory
+# ==========================================================
+
+def load_inventory():
+
+    wb = load_workbook(
+        EXCEL_FILE,
+        read_only=True
+    )
+
+    ws = wb[SHEET_NAME]
+
+    headers = [
+        cell.value
+        for cell in ws[1]
+    ]
+
+    inventory = []
+
+    for row in ws.iter_rows(
+        min_row=2,
+        values_only=True
+    ):
+
+        record = dict(
+            zip(headers, row)
+        )
+
+        if record["CIDR"]:
+
+            try:
+
+                record["NETWORK"] = ipaddress.ip_network(
+                    record["CIDR"],
+                    strict=False
+                )
+
+                inventory.append(record)
+
+            except ValueError:
+                pass
+
+
+    return inventory
+
+
+
+# ==========================================================
+# Lookup
+# ==========================================================
+
+def lookup_ip(query, inventory):
+
+    # Remove CIDR if user enters one
+    try:
+
+        if "/" in query:
+
+            ip = ipaddress.ip_interface(
+                query
+            ).ip
+
+        else:
+
+            ip = ipaddress.ip_address(
+                query
+            )
+
+
+    except ValueError:
+
+        print(
+            f"Invalid IP/CIDR: {query}"
+        )
+
+        return
+
+
+
+    matches = []
+
+
+    for record in inventory:
+
+        network = record["NETWORK"]
+
+        if ip.version == network.version:
+
+            if ip in network:
+
+                matches.append(
+                    record
+                )
+
+
+    if not matches:
+
+        print()
+        print(
+            f"No match found for {query}"
+        )
+        print()
+
+        return
+
+
+
+    print()
+    print("=" * 90)
+    print(
+        f"Matches for {query}"
+    )
+    print("=" * 90)
+
+
+    for match in matches:
+
+        print()
+
+        print(
+            f"Account     : {match['Account Name']}"
+        )
+
+        print(
+            f"Account ID  : {match['Account ID']}"
+        )
+
+        print(
+            f"Region      : {match['Region']}"
+        )
+
+        print(
+            f"VPC Name    : {match['VPC Name']}"
+        )
+
+        print(
+            f"VPC ID      : {match['VPC ID']}"
+        )
+
+        print(
+            f"CIDR        : {match['CIDR']}"
+        )
+
+        print(
+            f"State       : {match['VPC State']}"
+        )
+
+        print(
+            "-" * 90
+        )
+
+
+
+# ==========================================================
+# Interactive Mode
+# ==========================================================
+
+if __name__ == "__main__":
+
+
+    print(
+        "Loading AWS VPC CIDR inventory..."
+    )
+
+    inventory = load_inventory()
+
+
+    print(
+        f"Loaded {len(inventory)} CIDR entries."
+    )
+
+    print()
+    print(
+        "Enter IP or CIDR. Type 'exit' to quit."
+    )
+
+
+    while True:
+
+        query = input(
+            "\nIP> "
+        ).strip()
+
+
+        if query.lower() in (
+            "exit",
+            "quit",
+            "q"
+        ):
+
+            break
+
+
+        lookup_ip(
+            query,
+            inventory
+        )
