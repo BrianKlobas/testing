@@ -4,7 +4,9 @@ import boto3
 from botocore.exceptions import ClientError
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+import threading
 
 
 # ==========================================================
@@ -23,8 +25,14 @@ REGIONS = [
 
 OUTPUT_FILE = "aws_vpc_cidr_inventory.xlsx"
 
+# Tune this
+MAX_WORKERS = 25
 
-# Uses default AWS credentials/profile
+
+# ==========================================================
+# AWS clients
+# ==========================================================
+
 session = boto3.Session()
 
 org = session.client("organizations")
@@ -32,21 +40,35 @@ sts = session.client("sts")
 
 
 # ==========================================================
-# Organizations
+# Thread-safe counters
+# ==========================================================
+
+lock = threading.Lock()
+
+completed = 0
+
+
+# ==========================================================
+# Organization
 # ==========================================================
 
 def list_accounts():
 
-    paginator = org.get_paginator("list_accounts")
+    paginator = org.get_paginator(
+        "list_accounts"
+    )
 
     accounts = []
 
     for page in paginator.paginate():
+
         for account in page["Accounts"]:
+
             if account["Status"] == "ACTIVE":
                 accounts.append(account)
 
-    return sorted(accounts, key=lambda x: x["Name"])
+    return accounts
+
 
 
 # ==========================================================
@@ -57,7 +79,7 @@ def assume_role(account_id):
 
     response = sts.assume_role(
         RoleArn=f"arn:aws:iam::{account_id}:role/{ROLE_NAME}",
-        RoleSessionName="VpcCIDRInventory",
+        RoleSessionName="VpcInventory",
     )
 
     creds = response["Credentials"]
@@ -85,14 +107,163 @@ def get_name_tag(tags):
     return ""
 
 
+
 # ==========================================================
-# Excel Setup
+# Worker
+# ==========================================================
+
+def scan_account(account):
+
+    global completed
+
+    rows = []
+
+    try:
+
+        acct_session = assume_role(
+            account["Id"]
+        )
+
+
+        for region in REGIONS:
+
+            try:
+
+                ec2 = acct_session.client(
+                    "ec2",
+                    region_name=region
+                )
+
+                vpcs = ec2.describe_vpcs()["Vpcs"]
+
+
+                for vpc in vpcs:
+
+                    vpc_name = get_name_tag(
+                        vpc.get("Tags")
+                    )
+
+
+                    for cidr in vpc.get(
+                        "CidrBlockAssociationSet",
+                        []
+                    ):
+
+                        rows.append([
+                            account["Name"],
+                            account["Id"],
+                            region,
+                            vpc_name,
+                            vpc["VpcId"],
+                            "IPv4",
+                            cidr["CidrBlock"],
+                            vpc["State"],
+                            vpc["IsDefault"],
+                        ])
+
+
+
+                    for cidr in vpc.get(
+                        "Ipv6CidrBlockAssociationSet",
+                        []
+                    ):
+
+                        if cidr.get(
+                            "Ipv6CidrBlock"
+                        ):
+
+                            rows.append([
+                                account["Name"],
+                                account["Id"],
+                                region,
+                                vpc_name,
+                                vpc["VpcId"],
+                                "IPv6",
+                                cidr["Ipv6CidrBlock"],
+                                vpc["State"],
+                                vpc["IsDefault"],
+                            ])
+
+
+            except ClientError:
+                continue
+
+
+    except Exception as e:
+
+        rows.append([
+            account["Name"],
+            account["Id"],
+            "ERROR",
+            "",
+            "",
+            "",
+            str(e),
+            "",
+            "",
+        ])
+
+
+
+    with lock:
+        completed += 1
+        print(
+            f"[{completed}/{TOTAL_ACCOUNTS}] "
+            f"{account['Name']}"
+        )
+
+
+    return rows
+
+
+
+# ==========================================================
+# Main
+# ==========================================================
+
+accounts = list_accounts()
+
+TOTAL_ACCOUNTS = len(accounts)
+
+print(
+    f"Scanning {TOTAL_ACCOUNTS} accounts "
+    f"with {MAX_WORKERS} workers..."
+)
+
+
+all_rows = []
+
+
+with ThreadPoolExecutor(
+    max_workers=MAX_WORKERS
+) as executor:
+
+    futures = [
+        executor.submit(
+            scan_account,
+            account
+        )
+        for account in accounts
+    ]
+
+
+    for future in as_completed(futures):
+
+        result = future.result()
+
+        all_rows.extend(result)
+
+
+
+# ==========================================================
+# Write Excel
 # ==========================================================
 
 wb = Workbook()
 
 ws = wb.active
 ws.title = "VPC CIDR Inventory"
+
 
 headers = [
     "Account Name",
@@ -106,129 +277,30 @@ headers = [
     "Default VPC",
 ]
 
+
 ws.append(headers)
 
 
-# ==========================================================
-# Inventory
-# ==========================================================
-
-accounts = list_accounts()
-
-print(f"Scanning {len(accounts)} accounts...\n")
+for row in all_rows:
+    ws.append(row)
 
 
-for account in accounts:
-
-    print("=" * 100)
-    print(f"{account['Name']} ({account['Id']})")
-    print("=" * 100)
-
-    try:
-        acct_session = assume_role(account["Id"])
-
-    except ClientError as e:
-        print(f"FAILED ROLE ASSUME: {e}")
-        continue
-
-
-    for region in REGIONS:
-
-        try:
-
-            ec2 = acct_session.client(
-                "ec2",
-                region_name=region
-            )
-
-            vpcs = ec2.describe_vpcs()["Vpcs"]
-
-        except ClientError as e:
-            print(
-                f"{region}: "
-                f"{e.response['Error']['Code']}"
-            )
-            continue
-
-
-        for vpc in vpcs:
-
-            vpc_name = get_name_tag(
-                vpc.get("Tags")
-            )
-
-
-            # IPv4 CIDRs
-            for cidr in vpc.get(
-                "CidrBlockAssociationSet",
-                []
-            ):
-
-                ws.append([
-                    account["Name"],
-                    account["Id"],
-                    region,
-                    vpc_name,
-                    vpc["VpcId"],
-                    "IPv4",
-                    cidr["CidrBlock"],
-                    vpc["State"],
-                    vpc["IsDefault"],
-                ])
-
-                print(
-                    f"{region} "
-                    f"{vpc['VpcId']} "
-                    f"{cidr['CidrBlock']}"
-                )
-
-
-            # IPv6 CIDRs
-            for cidr in vpc.get(
-                "Ipv6CidrBlockAssociationSet",
-                []
-            ):
-
-                if cidr.get("Ipv6CidrBlock"):
-
-                    ws.append([
-                        account["Name"],
-                        account["Id"],
-                        region,
-                        vpc_name,
-                        vpc["VpcId"],
-                        "IPv6",
-                        cidr["Ipv6CidrBlock"],
-                        vpc["State"],
-                        vpc["IsDefault"],
-                    ])
-
-
-# ==========================================================
-# Formatting
-# ==========================================================
 
 for column in ws.columns:
 
-    max_length = 0
-
-    column_letter = get_column_letter(
-        column[0].column
+    length = max(
+        len(str(cell.value))
+        if cell.value
+        else 0
+        for cell in column
     )
 
-    for cell in column:
-        if cell.value:
-            max_length = max(
-                max_length,
-                len(str(cell.value))
-            )
-
     ws.column_dimensions[
-        column_letter
-    ].width = max_length + 3
+        get_column_letter(column[0].column)
+    ].width = length + 3
 
 
-# Add metadata sheet
+
 meta = wb.create_sheet("Metadata")
 
 meta.append([
@@ -237,17 +309,23 @@ meta.append([
 ])
 
 meta.append([
-    "Regions",
-    ", ".join(REGIONS)
+    "Accounts Scanned",
+    TOTAL_ACCOUNTS
 ])
 
 meta.append([
-    "Role Used",
-    ROLE_NAME
+    "Regions",
+    ",".join(REGIONS)
 ])
 
 
-wb.save(OUTPUT_FILE)
+wb.save(
+    OUTPUT_FILE
+)
+
 
 print()
-print(f"Inventory saved: {OUTPUT_FILE}")
+print(
+    f"Complete. Saved {len(all_rows)} records "
+    f"to {OUTPUT_FILE}"
+)
