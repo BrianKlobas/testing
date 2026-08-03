@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+
+import boto3
+from botocore.exceptions import ClientError
+
+org = boto3.client("organizations")
+
+
+def get_root_id():
+    return org.list_roots()["Roots"][0]["Id"]
+
+
+def list_ous(parent_id):
+    paginator = org.get_paginator("list_organizational_units_for_parent")
+
+    ous = []
+    for page in paginator.paginate(ParentId=parent_id):
+        ous.extend(page["OrganizationalUnits"])
+
+    return ous
+
+
+def list_accounts(parent_id):
+    paginator = org.get_paginator("list_accounts_for_parent")
+
+    accounts = []
+    for page in paginator.paginate(ParentId=parent_id):
+        accounts.extend(page["Accounts"])
+
+    return accounts
+
+
+rows = []
+
+
+def walk(parent_id, path):
+    # Accounts directly under this OU/root
+    for acct in list_accounts(parent_id):
+        rows.append({
+            "ou": path,
+            "name": acct["Name"],
+            "id": acct["Id"]
+        })
+
+    # Child OUs
+    for ou in list_ous(parent_id):
+        walk(
+            ou["Id"],
+            f"{path}/{ou['Name']}"
+        )
+
+
+root_id = get_root_id()
+walk(root_id, "Root")
+
+# Determine column widths
+ou_width = max(len(r["ou"]) for r in rows) if rows else 10
+name_width = max(len(r["name"]) for r in rows) if rows else 10
+
+print(
+    f'{"OU":<{ou_width}}  '
+    f'{"Account Name":<{name_width}}  '
+    f'Account ID'
+)
+
+print("-" * (ou_width + name_width + 16))
+
+for r in sorted(rows, key=lambda x: (x["ou"], x["name"])):
+    print(
+        f'{r["ou"]:<{ou_width}}  '
+        f'{r["name"]:<{name_width}}  '
+        f'{r["id"]}'
+    )
