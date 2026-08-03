@@ -1,77 +1,67 @@
 <!DOCTYPE html>
 <html>
+
 <head>
-<title>AWS IP / ENI Inventory</title>
+
+<title>AWS Asset Inventory Portal</title>
 
 <style>
 
 body {
     font-family: Arial, Helvetica, sans-serif;
-    background: #f3f4f6;
-    margin: 0;
-    padding: 40px;
-    color: #222;
+    background:#f4f6f8;
+    margin:40px;
+    color:#222;
 }
 
 
 .header {
-    background: #232f3e;
-    color: white;
-    padding: 25px;
-    border-radius: 10px;
+
+    background:#232f3e;
+    color:white;
+    padding:25px;
+    border-radius:10px;
+
 }
 
 
-.header h1 {
-    margin: 0;
-}
+.search {
 
+    background:white;
+    padding:25px;
+    margin-top:20px;
+    border-radius:10px;
 
-.search-box {
-
-    margin-top: 25px;
-    background: white;
-    padding: 25px;
-    border-radius: 10px;
 }
 
 
 input {
 
-    width: 500px;
-    padding: 12px;
-    font-size: 16px;
+    width:500px;
+    padding:12px;
+    font-size:16px;
 
 }
 
 
 button {
 
-    padding: 12px 20px;
-    margin-left: 10px;
-    background: #146eb4;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    cursor:pointer;
+    padding:12px 20px;
+    background:#146eb4;
+    color:white;
+    border:0;
+    border-radius:5px;
 
 }
 
 
-button:hover {
+.card {
 
-    background:#0f4f82;
-
-}
-
-
-.result {
-
-    margin-top:25px;
     background:white;
+    margin-top:20px;
     padding:25px;
     border-radius:10px;
-    display:none;
+    box-shadow:0 2px 5px #ccc;
 
 }
 
@@ -79,8 +69,8 @@ button:hover {
 .grid {
 
     display:grid;
-    grid-template-columns:200px auto;
-    gap:12px;
+    grid-template-columns:220px auto;
+    gap:10px;
 
 }
 
@@ -93,28 +83,57 @@ button:hover {
 }
 
 
-.value {
+.code {
 
     font-family:monospace;
 
 }
 
 
-.badge {
+table {
 
-    display:inline-block;
-    background:#e7f3ff;
-    color:#146eb4;
-    padding:5px 10px;
-    border-radius:15px;
+    width:100%;
+    border-collapse:collapse;
 
 }
 
 
-.footer {
+th {
 
-    margin-top:40px;
-    color:#777;
+    background:#232f3e;
+    color:white;
+    padding:10px;
+    text-align:left;
+
+}
+
+
+td {
+
+    border-bottom:1px solid #ddd;
+    padding:10px;
+
+}
+
+
+
+.tag {
+
+    display:inline-block;
+    background:#e7f3ff;
+    color:#146eb4;
+    padding:6px 10px;
+    border-radius:15px;
+    margin:4px;
+
+}
+
+
+.sg {
+
+    border-left:5px solid #146eb4;
+    padding-left:15px;
+    margin-top:20px;
 
 }
 
@@ -124,45 +143,14 @@ button:hover {
 
 <script>
 
+function lookup(){
 
-function searchIP() {
-
-
-    let query =
-        document.getElementById(
-            "search"
-        ).value;
-
-
-    if (!query) {
-        return;
-    }
-
-
-    /*
-       Sample response.
-       This would later become:
-
-       fetch(
-          "/api/search?query=" + query
-       )
-
-    */
-
-
-    document.getElementById(
-        "result"
-    ).style.display="block";
-
-
-    document.getElementById(
-        "query"
-    ).innerHTML=query;
+document.getElementById(
+"results"
+).style.display="block";
 
 
 }
-
-
 
 </script>
 
@@ -176,33 +164,25 @@ function searchIP() {
 <div class="header">
 
 <h1>
-AWS IP / ENI Inventory
+AWS Asset Inventory Portal
 </h1>
 
 <p>
-Search AWS ownership by IP address, ENI, hostname, or instance ID
+Search IP, ENI, Instance ID, RDS ID, Hostname
 </p>
 
 </div>
 
 
 
-<div class="search-box">
+<div class="search">
 
+<input 
+placeholder="Example: 10.20.15.44"
+>
 
-<h2>
+<button onclick="lookup()">
 Search
-</h2>
-
-
-<input
-id="search"
-placeholder="Example: 10.20.15.44, eni-012345, app01-prod"
-/>
-
-
-<button onclick="searchIP()">
-Lookup
 </button>
 
 
@@ -210,19 +190,17 @@ Lookup
 
 
 
-<div id="result" class="result">
+
+<div id="results" style="display:none">
+
+
+
+<div class="card">
 
 
 <h2>
-Search Result
+Asset Overview
 </h2>
-
-
-<p>
-Query:
-<span class="badge" id="query"></span>
-</p>
-
 
 
 <div class="grid">
@@ -232,9 +210,12 @@ Query:
 Account
 </div>
 
-<div class="value">
-Production-App-01
-(123456789012)
+<div>
+Production-App
+<br>
+<span class="code">
+123456789012
+</span>
 </div>
 
 
@@ -243,72 +224,28 @@ Production-App-01
 Region
 </div>
 
-<div class="value">
+<div>
 us-west-2
 </div>
 
 
 
 <div class="label">
-Availability Zone
+Resource Type
 </div>
 
-<div class="value">
-us-west-2a
-</div>
-
-
-
-<div class="label">
-VPC
-</div>
-
-<div class="value">
-Prod-Core
-<br>
-vpc-0123456789abcdef
+<div>
+EC2 Instance
 </div>
 
 
 
 <div class="label">
-Subnet
+Instance ID
 </div>
 
-<div class="value">
-Private-App-Subnet-A
-<br>
-subnet-0123456789abcdef
-</div>
-
-
-
-<div class="label">
-ENI
-</div>
-
-<div class="value">
-eni-0123456789abcdef
-</div>
-
-
-
-<div class="label">
-Private IP
-</div>
-
-<div class="value">
-10.20.15.44
-</div>
-
-
-
-<div class="label">
-Public IP
-</div>
-
-<div class="value">
-54.12.34.56
+<div class="code">
+i-0123456789abcdef
 </div>
 
 
@@ -317,44 +254,423 @@ Public IP
 Hostname
 </div>
 
-<div class="value">
-ip-10-20-15-44.ec2.internal
-</div>
-
-
-
-<div class="label">
-Instance
-</div>
-
-<div class="value">
+<div class="code">
 app01-prod-web01
-<br>
-i-0123456789abcdef
 </div>
 
 
 
 <div class="label">
-IAM Role
+Private IP
 </div>
 
-<div class="value">
-AppProductionRole
-</div>
-
-
-
+<div class="code">
+10.20.15.44
 </div>
 
 
+<div class="label">
+ENI
+</div>
+
+<div class="code">
+eni-0123456789abcdef
+</div>
+
+
+</div>
+
+
 </div>
 
 
 
-<div class="footer">
 
-AWS Inventory Portal Prototype
+
+<div class="card">
+
+
+<h2>
+Network Placement
+</h2>
+
+
+<div class="grid">
+
+
+<div class="label">
+VPC
+</div>
+
+<div>
+Prod-Core
+<br>
+<span class="code">
+vpc-0123456789
+</span>
+</div>
+
+
+
+<div class="label">
+Subnet
+</div>
+
+<div>
+App Private Subnet A
+<br>
+<span class="code">
+subnet-0123456789
+</span>
+</div>
+
+
+
+<div class="label">
+Availability Zone
+</div>
+
+<div>
+us-west-2a
+</div>
+
+
+</div>
+
+
+</div>
+
+
+
+
+
+
+
+<div class="card">
+
+
+<h2>
+Resource Tags
+</h2>
+
+
+<span class="tag">
+Owner: Application Team
+</span>
+
+
+<span class="tag">
+App: Customer Portal
+</span>
+
+
+<span class="tag">
+Purpose: Web Tier
+</span>
+
+
+<span class="tag">
+Environment: Production
+</span>
+
+
+<span class="tag">
+CostCenter: 12345
+</span>
+
+
+</div>
+
+
+
+
+
+
+
+<div class="card">
+
+
+<h2>
+Attached Security Groups
+</h2>
+
+
+
+<div class="sg">
+
+
+<h3>
+sg-app-web
+</h3>
+
+
+<div class="code">
+sg-0123456789
+</div>
+
+
+
+<h4>
+Inbound Rules
+</h4>
+
+
+<table>
+
+
+<tr>
+<th>
+Protocol
+</th>
+
+<th>
+Port
+</th>
+
+<th>
+Source
+</th>
+
+<th>
+Description
+</th>
+
+</tr>
+
+
+
+<tr>
+
+<td>
+TCP
+</td>
+
+<td>
+443
+</td>
+
+<td>
+0.0.0.0/0
+</td>
+
+<td>
+HTTPS Access
+</td>
+
+</tr>
+
+
+
+<tr>
+
+<td>
+TCP
+</td>
+
+<td>
+22
+</td>
+
+<td>
+10.10.0.0/16
+</td>
+
+<td>
+Admin Access
+</td>
+
+</tr>
+
+
+</table>
+
+
+
+<h4>
+Outbound Rules
+</h4>
+
+
+<table>
+
+
+<tr>
+
+<th>
+Protocol
+</th>
+
+<th>
+Port
+</th>
+
+<th>
+Destination
+</th>
+
+</tr>
+
+
+<tr>
+
+<td>
+All
+</td>
+
+<td>
+All
+</td>
+
+<td>
+0.0.0.0/0
+</td>
+
+</tr>
+
+
+</table>
+
+
+
+</div>
+
+
+
+
+
+<div class="sg">
+
+
+<h3>
+sg-database-access
+</h3>
+
+
+<div class="code">
+sg-987654321
+</div>
+
+
+<h4>
+Inbound Rules
+</h4>
+
+
+<table>
+
+
+<tr>
+
+<th>
+Protocol
+</th>
+
+<th>
+Port
+</th>
+
+<th>
+Source
+</th>
+
+</tr>
+
+
+<tr>
+
+<td>
+TCP
+</td>
+
+<td>
+3306
+</td>
+
+<td>
+sg-app-web
+</td>
+
+</tr>
+
+
+</table>
+
+
+
+</div>
+
+
+</div>
+
+
+
+
+
+
+
+
+<div class="card">
+
+
+<h2>
+Associated Database Resources
+</h2>
+
+
+<table>
+
+
+<tr>
+
+<th>
+Type
+</th>
+
+<th>
+Name
+</th>
+
+<th>
+ID
+</th>
+
+<th>
+Endpoint
+</th>
+
+</tr>
+
+
+
+<tr>
+
+<td>
+RDS MySQL
+</td>
+
+<td>
+customer-db-prod
+</td>
+
+<td class="code">
+database-abc123
+</td>
+
+<td class="code">
+customer-db.xxxxx.us-west-2.rds.amazonaws.com
+</td>
+
+</tr>
+
+
+</table>
+
+
+</div>
+
+
+
+
 
 </div>
 
