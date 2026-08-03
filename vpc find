@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+
+import argparse
+import boto3
+from botocore.exceptions import ClientError
+
+# Regions to inspect
+REGIONS = [
+    "us-east-1",
+    "us-east-2",
+    "ap-south-1",
+    "ap-southeast-1",
+    "us-west-2",
+]
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--profile", help="AWS CLI profile")
+parser.add_argument(
+    "--role",
+    default="OrganizationAccountAccessRole",
+    help="IAM role to assume in each account",
+)
+args = parser.parse_args()
+
+# ----------------------------------------------------------------------
+
+if args.profile:
+    session = boto3.Session(profile_name=args.profile)
+else:
+    session = boto3.Session()
+
+org = session.client("organizations")
+sts = session.client("sts")
+
+
+def list_accounts():
+    paginator = org.get_paginator("list_accounts")
+
+    accounts = []
+
+    for page in paginator.paginate():
+        for acct in page["Accounts"]:
+            if acct["Status"] == "ACTIVE":
+                accounts.append(acct)
+
+    return sorted(accounts, key=lambda a: a["Name"])
+
+
+def assume_role(account_id):
+
+    response = sts.assume_role(
+        RoleArn=f"arn:aws:iam::{account_id}:role/{args.role}",
+        RoleSessionName="OrgVpcInventory",
+    )
+
+    creds = response["Credentials"]
+
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+    )
+
+
+def tag_name(tags):
+
+    if not tags:
+        return ""
+
+    for tag in tags:
+        if tag["Key"] == "Name":
+            return tag["Value"]
+
+    return ""
+
+
+accounts = list_accounts()
+
+for account in accounts:
+
+    print("=" * 120)
+    print(f"{account['Name']} ({account['Id']})")
+    print("=" * 120)
+
+    try:
+        acct_session = assume_role(account["Id"])
+
+    except ClientError as e:
+        print(f"ERROR assuming role: {e}")
+        print()
+        continue
+
+    for region in REGIONS:
+
+        try:
+            ec2 = acct_session.client("ec2", region_name=region)
+
+            vpcs = ec2.describe_vpcs()["Vpcs"]
+
+        except ClientError as e:
+            print(f"\n{region}: {e.response['Error']['Code']}")
+            continue
+
+        if not vpcs:
+            continue
+
+        print(f"\n[{region}]")
+
+        for vpc in sorted(vpcs, key=lambda v: v["VpcId"]):
+
+            name = tag_name(vpc.get("Tags"))
+
+            ipv4 = [
+                assoc["CidrBlock"]
+                for assoc in vpc.get("CidrBlockAssociationSet", [])
+            ]
+
+            ipv6 = [
+                assoc["Ipv6CidrBlock"]
+                for assoc in vpc.get("Ipv6CidrBlockAssociationSet", [])
+                if assoc.get("Ipv6CidrBlock")
+            ]
+
+            print(
+                f"\n  {vpc['VpcId']}"
+                + (f" ({name})" if name else "")
+            )
+
+            for cidr in ipv4:
+                print(f"      IPv4 : {cidr}")
+
+            for cidr in ipv6:
+                print(f"      IPv6 : {cidr}")
+
+    print()
