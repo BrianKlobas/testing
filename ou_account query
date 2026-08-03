@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+
+import boto3
+import urllib.parse
+
+
+# ==========================================================
+# Configuration
+# ==========================================================
+
+ROLE_NAME = "OrganizationAccountAccessRole"
+
+
+# ==========================================================
+# AWS Session
+# ==========================================================
+
+session = boto3.Session()
+
+org = session.client("organizations")
+
+
+# ==========================================================
+# Organization Functions
+# ==========================================================
+
+def get_root_id():
+
+    return org.list_roots()["Roots"][0]["Id"]
+
+
+
+def list_ous(parent_id):
+
+    paginator = org.get_paginator(
+        "list_organizational_units_for_parent"
+    )
+
+    ous = []
+
+    for page in paginator.paginate(
+        ParentId=parent_id
+    ):
+
+        ous.extend(
+            page["OrganizationalUnits"]
+        )
+
+    return ous
+
+
+
+def list_accounts(parent_id):
+
+    paginator = org.get_paginator(
+        "list_accounts_for_parent"
+    )
+
+    accounts = []
+
+    for page in paginator.paginate(
+        ParentId=parent_id
+    ):
+
+        accounts.extend(
+            page["Accounts"]
+        )
+
+    return accounts
+
+
+
+# ==========================================================
+# Inventory
+# ==========================================================
+
+accounts = []
+
+
+def walk(parent_id, path):
+
+
+    for acct in list_accounts(parent_id):
+
+        switch_url = (
+            "https://signin.aws.amazon.com/switchrole?"
+            f"account={acct['Id']}"
+            f"&roleName={urllib.parse.quote(ROLE_NAME)}"
+            f"&displayName={urllib.parse.quote(acct['Name'])}"
+        )
+
+
+        accounts.append(
+            {
+                "name": acct["Name"],
+                "id": acct["Id"],
+                "ou": path,
+                "url": switch_url,
+                "status": acct["Status"],
+            }
+        )
+
+
+
+    for ou in list_ous(parent_id):
+
+        walk(
+            ou["Id"],
+            f"{path}/{ou['Name']}"
+        )
+
+
+
+print(
+    "Loading AWS Organization accounts..."
+)
+
+walk(
+    get_root_id(),
+    "Root"
+)
+
+
+print(
+    f"Loaded {len(accounts)} accounts."
+)
+
+
+# ==========================================================
+# Interactive Search
+# ==========================================================
+
+while True:
+
+    print()
+
+    search = input(
+        "Search account name (or exit): "
+    ).strip()
+
+
+    if search.lower() in (
+        "exit",
+        "quit",
+        "q",
+    ):
+        break
+
+
+    if not search:
+        continue
+
+
+
+    matches = []
+
+
+    for acct in accounts:
+
+        if search.lower() in acct["name"].lower():
+
+            matches.append(acct)
+
+
+
+    print()
+
+
+    if not matches:
+
+        print(
+            f"No accounts found matching '{search}'"
+        )
+
+        continue
+
+
+
+    print(
+        "=" * 100
+    )
+
+    print(
+        f"Found {len(matches)} matches"
+    )
+
+    print(
+        "=" * 100
+    )
+
+
+    for acct in sorted(
+        matches,
+        key=lambda x: x["name"]
+    ):
+
+
+        print()
+
+        print(
+            f"Account Name : {acct['name']}"
+        )
+
+        print(
+            f"Account ID   : {acct['id']}"
+        )
+
+        print(
+            f"OU           : {acct['ou']}"
+        )
+
+        print(
+            f"Status       : {acct['status']}"
+        )
+
+        print(
+            f"Switch Role  : {acct['url']}"
+        )
+
+        print(
+            "-" * 100
+        )
