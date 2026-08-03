@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>AWS IP / ENI Inventory</title>
+
+<style>
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: #f3f4f6;
+    margin: 0;
+    padding: 40px;
+    color: #222;
+}
+
+
+.header {
+    background: #232f3e;
+    color: white;
+    padding: 25px;
+    border-radius: 10px;
+}
+
+
+.header h1 {
+    margin: 0;
+}
+
+
+.search-box {
+
+    margin-top: 25px;
+    background: white;
+    padding: 25px;
+    border-radius: 10px;
+}
+
+
+input {
+
+    width: 500px;
+    padding: 12px;
+    font-size: 16px;
+
+}
+
+
+button {
+
+    padding: 12px 20px;
+    margin-left: 10px;
+    background: #146eb4;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor:pointer;
+
+}
+
+
+button:hover {
+
+    background:#0f4f82;
+
+}
+
+
+.result {
+
+    margin-top:25px;
+    background:white;
+    padding:25px;
+    border-radius:10px;
+    display:none;
+
+}
+
+
+.grid {
+
+    display:grid;
+    grid-template-columns:200px auto;
+    gap:12px;
+
+}
+
+
+.label {
+
+    font-weight:bold;
+    color:#555;
+
+}
+
+
+.value {
+
+    font-family:monospace;
+
+}
+
+
+.badge {
+
+    display:inline-block;
+    background:#e7f3ff;
+    color:#146eb4;
+    padding:5px 10px;
+    border-radius:15px;
+
+}
+
+
+.footer {
+
+    margin-top:40px;
+    color:#777;
+
+}
+
+
+</style>
+
+
+<script>
+
+
+function searchIP() {
+
+
+    let query =
+        document.getElementById(
+            "search"
+        ).value;
+
+
+    if (!query) {
+        return;
+    }
+
+
+    /*
+       Sample response.
+       This would later become:
+
+       fetch(
+          "/api/search?query=" + query
+       )
+
+    */
+
+
+    document.getElementById(
+        "result"
+    ).style.display="block";
+
+
+    document.getElementById(
+        "query"
+    ).innerHTML=query;
+
+
+}
+
+
+
+</script>
+
+
+</head>
+
+
+<body>
+
+
+<div class="header">
+
+<h1>
+AWS IP / ENI Inventory
+</h1>
+
+<p>
+Search AWS ownership by IP address, ENI, hostname, or instance ID
+</p>
+
+</div>
+
+
+
+<div class="search-box">
+
+
+<h2>
+Search
+</h2>
+
+
+<input
+id="search"
+placeholder="Example: 10.20.15.44, eni-012345, app01-prod"
+/>
+
+
+<button onclick="searchIP()">
+Lookup
+</button>
+
+
+</div>
+
+
+
+<div id="result" class="result">
+
+
+<h2>
+Search Result
+</h2>
+
+
+<p>
+Query:
+<span class="badge" id="query"></span>
+</p>
+
+
+
+<div class="grid">
+
+
+<div class="label">
+Account
+</div>
+
+<div class="value">
+Production-App-01
+(123456789012)
+</div>
+
+
+
+<div class="label">
+Region
+</div>
+
+<div class="value">
+us-west-2
+</div>
+
+
+
+<div class="label">
+Availability Zone
+</div>
+
+<div class="value">
+us-west-2a
+</div>
+
+
+
+<div class="label">
+VPC
+</div>
+
+<div class="value">
+Prod-Core
+<br>
+vpc-0123456789abcdef
+</div>
+
+
+
+<div class="label">
+Subnet
+</div>
+
+<div class="value">
+Private-App-Subnet-A
+<br>
+subnet-0123456789abcdef
+</div>
+
+
+
+<div class="label">
+ENI
+</div>
+
+<div class="value">
+eni-0123456789abcdef
+</div>
+
+
+
+<div class="label">
+Private IP
+</div>
+
+<div class="value">
+10.20.15.44
+</div>
+
+
+
+<div class="label">
+Public IP
+</div>
+
+<div class="value">
+54.12.34.56
+</div>
+
+
+
+<div class="label">
+Hostname
+</div>
+
+<div class="value">
+ip-10-20-15-44.ec2.internal
+</div>
+
+
+
+<div class="label">
+Instance
+</div>
+
+<div class="value">
+app01-prod-web01
+<br>
+i-0123456789abcdef
+</div>
+
+
+
+<div class="label">
+IAM Role
+</div>
+
+<div class="value">
+AppProductionRole
+</div>
+
+
+
+</div>
+
+
+</div>
+
+
+
+<div class="footer">
+
+AWS Inventory Portal Prototype
+
+</div>
+
+
+</body>
+
+</html>
