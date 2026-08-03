@@ -3,44 +3,41 @@
 
 <head>
 
-<title>AWS Asset Inventory Portal</title>
+<title>AWS Security Asset Explorer</title>
 
 <style>
 
 body {
     font-family: Arial, Helvetica, sans-serif;
-    background:#f4f6f8;
+    background:#f3f5f7;
     margin:40px;
     color:#222;
 }
 
-
 .header {
-
     background:#232f3e;
     color:white;
     padding:25px;
     border-radius:10px;
+}
 
+.header h1 {
+    margin:0;
 }
 
 
-.search {
-
+.search-box {
+    margin-top:20px;
     background:white;
     padding:25px;
-    margin-top:20px;
     border-radius:10px;
-
 }
 
 
 input {
-
     width:500px;
     padding:12px;
     font-size:16px;
-
 }
 
 
@@ -49,19 +46,29 @@ button {
     padding:12px 20px;
     background:#146eb4;
     color:white;
-    border:0;
+    border:none;
     border-radius:5px;
+    cursor:pointer;
 
 }
 
 
 .card {
 
-    background:white;
     margin-top:20px;
+    background:white;
     padding:25px;
     border-radius:10px;
     box-shadow:0 2px 5px #ccc;
+
+}
+
+
+.section-title {
+
+    font-size:22px;
+    font-weight:bold;
+    margin-bottom:15px;
 
 }
 
@@ -70,7 +77,7 @@ button {
 
     display:grid;
     grid-template-columns:220px auto;
-    gap:10px;
+    gap:12px;
 
 }
 
@@ -86,6 +93,38 @@ button {
 .code {
 
     font-family:monospace;
+    background:#eee;
+    padding:3px;
+
+}
+
+
+.badge {
+
+    display:inline-block;
+    background:#e7f3ff;
+    color:#146eb4;
+    padding:6px 12px;
+    border-radius:15px;
+    margin:4px;
+
+}
+
+
+.sg {
+
+    border-left:5px solid #146eb4;
+    padding-left:15px;
+    margin-top:20px;
+
+}
+
+
+.firewall {
+
+    border-left:5px solid #d9534f;
+    padding-left:15px;
+    margin-top:20px;
 
 }
 
@@ -94,6 +133,7 @@ table {
 
     width:100%;
     border-collapse:collapse;
+    margin-top:15px;
 
 }
 
@@ -110,30 +150,15 @@ th {
 
 td {
 
-    border-bottom:1px solid #ddd;
     padding:10px;
+    border-bottom:1px solid #ddd;
 
 }
 
 
+.hidden {
 
-.tag {
-
-    display:inline-block;
-    background:#e7f3ff;
-    color:#146eb4;
-    padding:6px 10px;
-    border-radius:15px;
-    margin:4px;
-
-}
-
-
-.sg {
-
-    border-left:5px solid #146eb4;
-    padding-left:15px;
-    margin-top:20px;
+    display:none;
 
 }
 
@@ -147,8 +172,16 @@ function lookup(){
 
 document.getElementById(
 "results"
-).style.display="block";
+).classList.remove(
+"hidden"
+);
 
+document.getElementById(
+"query"
+).innerHTML =
+document.getElementById(
+"search"
+).value;
 
 }
 
@@ -164,25 +197,34 @@ document.getElementById(
 <div class="header">
 
 <h1>
-AWS Asset Inventory Portal
+AWS Security Asset Explorer
 </h1>
 
 <p>
-Search IP, ENI, Instance ID, RDS ID, Hostname
+Unified AWS + Palo Alto security context lookup
 </p>
 
 </div>
 
 
 
-<div class="search">
 
-<input 
-placeholder="Example: 10.20.15.44"
->
+<div class="search-box">
+
+
+<h2>
+Search Asset
+</h2>
+
+
+<input
+id="search"
+placeholder="IP, ENI, hostname, instance ID"
+/>
+
 
 <button onclick="lookup()">
-Search
+Lookup
 </button>
 
 
@@ -191,16 +233,25 @@ Search
 
 
 
-<div id="results" style="display:none">
+
+<div id="results" class="hidden">
 
 
 
 <div class="card">
 
 
-<h2>
+<div class="section-title">
 Asset Overview
-</h2>
+</div>
+
+
+Query:
+
+<span class="badge" id="query"></span>
+
+
+<br><br>
 
 
 <div class="grid">
@@ -211,13 +262,12 @@ Account
 </div>
 
 <div>
-Production-App
+app1-prod
 <br>
 <span class="code">
 123456789012
 </span>
 </div>
-
 
 
 <div class="label">
@@ -229,9 +279,8 @@ us-west-2
 </div>
 
 
-
 <div class="label">
-Resource Type
+Resource
 </div>
 
 <div>
@@ -239,25 +288,15 @@ EC2 Instance
 </div>
 
 
-
 <div class="label">
-Instance ID
+Instance
 </div>
 
 <div class="code">
 i-0123456789abcdef
-</div>
-
-
-
-<div class="label">
-Hostname
-</div>
-
-<div class="code">
+<br>
 app01-prod-web01
 </div>
-
 
 
 <div class="label">
@@ -280,8 +319,8 @@ eni-0123456789abcdef
 
 </div>
 
-
 </div>
+
 
 
 
@@ -290,9 +329,49 @@ eni-0123456789abcdef
 <div class="card">
 
 
-<h2>
-Network Placement
-</h2>
+<div class="section-title">
+Ownership / Tags
+</div>
+
+
+<span class="badge">
+Owner: Payments Team
+</span>
+
+
+<span class="badge">
+Application: Customer Portal
+</span>
+
+
+<span class="badge">
+Environment: Production
+</span>
+
+
+<span class="badge">
+Purpose: Web Tier
+</span>
+
+
+<span class="badge">
+Cost Center: 45678
+</span>
+
+
+</div>
+
+
+
+
+
+
+<div class="card">
+
+
+<div class="section-title">
+AWS Network Context
+</div>
 
 
 <div class="grid">
@@ -311,19 +390,17 @@ vpc-0123456789
 </div>
 
 
-
 <div class="label">
 Subnet
 </div>
 
 <div>
-App Private Subnet A
+Private-App-A
 <br>
 <span class="code">
 subnet-0123456789
 </span>
 </div>
-
 
 
 <div class="label">
@@ -345,69 +422,25 @@ us-west-2a
 
 
 
-
 <div class="card">
 
 
-<h2>
-Resource Tags
-</h2>
-
-
-<span class="tag">
-Owner: Application Team
-</span>
-
-
-<span class="tag">
-App: Customer Portal
-</span>
-
-
-<span class="tag">
-Purpose: Web Tier
-</span>
-
-
-<span class="tag">
-Environment: Production
-</span>
-
-
-<span class="tag">
-CostCenter: 12345
-</span>
-
-
+<div class="section-title">
+AWS Security Groups
 </div>
 
 
 
-
-
-
-
-<div class="card">
-
-
-<h2>
-Attached Security Groups
-</h2>
-
-
-
 <div class="sg">
-
 
 <h3>
 sg-app-web
 </h3>
 
 
-<div class="code">
+<span class="code">
 sg-0123456789
-</div>
-
+</span>
 
 
 <h4>
@@ -416,7 +449,6 @@ Inbound Rules
 
 
 <table>
-
 
 <tr>
 <th>
@@ -431,12 +463,7 @@ Port
 Source
 </th>
 
-<th>
-Description
-</th>
-
 </tr>
-
 
 
 <tr>
@@ -453,12 +480,7 @@ TCP
 0.0.0.0/0
 </td>
 
-<td>
-HTTPS Access
-</td>
-
 </tr>
-
 
 
 <tr>
@@ -475,89 +497,33 @@ TCP
 10.10.0.0/16
 </td>
 
-<td>
-Admin Access
-</td>
-
 </tr>
 
 
 </table>
-
-
-
-<h4>
-Outbound Rules
-</h4>
-
-
-<table>
-
-
-<tr>
-
-<th>
-Protocol
-</th>
-
-<th>
-Port
-</th>
-
-<th>
-Destination
-</th>
-
-</tr>
-
-
-<tr>
-
-<td>
-All
-</td>
-
-<td>
-All
-</td>
-
-<td>
-0.0.0.0/0
-</td>
-
-</tr>
-
-
-</table>
-
 
 
 </div>
-
 
 
 
 
 <div class="sg">
 
-
 <h3>
-sg-database-access
+sg-app-db-access
 </h3>
 
-
-<div class="code">
+<span class="code">
 sg-987654321
-</div>
+</span>
 
 
 <h4>
-Inbound Rules
-</h4>
+Inbound Rules</h4>
 
 
 <table>
-
 
 <tr>
 
@@ -596,7 +562,6 @@ sg-app-web
 </table>
 
 
-
 </div>
 
 
@@ -612,13 +577,12 @@ sg-app-web
 <div class="card">
 
 
-<h2>
-Associated Database Resources
-</h2>
+<div class="section-title">
+Associated Database
+</div>
 
 
 <table>
-
 
 <tr>
 
@@ -631,15 +595,10 @@ Name
 </th>
 
 <th>
-ID
-</th>
-
-<th>
 Endpoint
 </th>
 
 </tr>
-
 
 
 <tr>
@@ -652,12 +611,310 @@ RDS MySQL
 customer-db-prod
 </td>
 
-<td class="code">
-database-abc123
+<td>
+customer-db.xxxxxx.us-west-2.rds.amazonaws.com
 </td>
 
-<td class="code">
-customer-db.xxxxx.us-west-2.rds.amazonaws.com
+</tr>
+
+
+</table>
+
+
+</div>
+
+
+
+
+
+
+
+
+<div class="card">
+
+
+<div class="section-title">
+Palo Alto Panorama Match
+</div>
+
+
+<div class="grid">
+
+
+<div class="label">
+Panorama
+</div>
+
+<div>
+panorama-prod.company.com
+</div>
+
+
+<div class="label">
+Object Match
+</div>
+
+<div>
+
+APP1-WEB01
+
+<br>
+
+<span class="code">
+10.20.15.44/32
+</span>
+
+</div>
+
+
+<div class="label">
+Address Groups
+</div>
+
+<div>
+
+APP1-WEB-SERVERS
+
+<br>
+
+WEB-TIER-PRODUCTION
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+
+
+
+
+<div class="card">
+
+
+<div class="section-title">
+Palo Alto Security Rules
+</div>
+
+
+
+<div class="firewall">
+
+
+<h3>
+Firewall:
+PA-DC1-EDGE01
+</h3>
+
+
+Device Group:
+
+<b>
+Production
+</b>
+
+
+<br><br>
+
+
+Rule:
+
+<b>
+ALLOW-INTERNET-HTTPS-TO-WEB
+</b>
+
+
+<table>
+
+
+<tr>
+
+<th>
+Source
+</th>
+
+<th>
+Destination
+</th>
+
+<th>
+Application
+</th>
+
+<th>
+Action
+</th>
+
+</tr>
+
+
+<tr>
+
+<td>
+any
+</td>
+
+<td>
+APP1-WEB-SERVERS
+</td>
+
+<td>
+ssl
+</td>
+
+<td>
+allow
+</td>
+
+
+</tr>
+
+
+</table>
+
+
+<br>
+
+
+Hit Count:
+
+<b>
+124,532
+</b>
+
+
+</div>
+
+
+
+
+
+
+<div class="firewall">
+
+
+<h3>
+Firewall:
+PA-DC2-EDGE01
+</h3>
+
+
+Rule:
+
+<b>
+ALLOW-APP-TO-DATABASE
+</b>
+
+
+<table>
+
+<tr>
+
+<th>
+Source
+</th>
+
+<th>
+Destination
+</th>
+
+<th>
+Service
+</th>
+
+<th>
+Action
+</th>
+
+</tr>
+
+
+<tr>
+
+<td>
+APP1-WEB-SERVERS
+</td>
+
+<td>
+MYSQL-PROD
+</td>
+
+<td>
+tcp/3306
+</td>
+
+<td>
+allow
+</td>
+
+
+</tr>
+
+
+</table>
+
+
+</div>
+
+
+</div>
+
+
+
+
+
+
+
+<div class="card">
+
+
+<div class="section-title">
+NAT Policy Match
+</div>
+
+
+<table>
+
+<tr>
+
+<th>
+Rule
+</th>
+
+<th>
+Public IP
+</th>
+
+<th>
+Translated IP
+</th>
+
+<th>
+Firewall
+</th>
+
+</tr>
+
+
+<tr>
+
+<td>
+WEB-PUBLIC-DNAT
+</td>
+
+<td>
+203.0.113.50
+</td>
+
+<td>
+10.20.15.44
+</td>
+
+<td>
+PA-DC1-EDGE01
 </td>
 
 </tr>
