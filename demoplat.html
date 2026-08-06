@@ -1,0 +1,2377 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<title>
+Sentinel Security Orchestration Platform Demo
+</title>
+
+
+<style>
+
+body {
+
+    font-family: Arial, Helvetica, sans-serif;
+    background:#0b1220;
+    color:#ffffff;
+    margin:0;
+
+}
+
+
+header {
+
+    background:#111827;
+    padding:20px;
+    border-bottom:1px solid #334155;
+
+}
+
+
+header h1 {
+
+    margin:0;
+    color:#60a5fa;
+
+}
+
+
+nav {
+
+    background:#1e293b;
+    padding:15px;
+
+}
+
+
+nav button {
+
+    background:#334155;
+    color:white;
+    border:0;
+    padding:12px 20px;
+    margin-right:10px;
+    border-radius:5px;
+    cursor:pointer;
+
+}
+
+
+nav button:hover {
+
+    background:#2563eb;
+
+}
+
+
+.page {
+
+    display:none;
+    padding:25px;
+
+}
+
+
+.active {
+
+    display:block;
+
+}
+
+
+
+.cards {
+
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    gap:20px;
+
+}
+
+
+.card {
+
+    background:#172033;
+    padding:20px;
+    border-radius:10px;
+    border:1px solid #334155;
+
+}
+
+
+.card h3 {
+
+    color:#94a3b8;
+    margin-top:0;
+
+}
+
+
+.metric {
+
+    font-size:36px;
+    font-weight:bold;
+
+}
+
+
+.good {
+
+    color:#22c55e;
+
+}
+
+
+.warning {
+
+    color:#f59e0b;
+
+}
+
+
+.bad {
+
+    color:#ef4444;
+
+}
+
+
+.panel {
+
+    background:#172033;
+    padding:20px;
+    border-radius:10px;
+    margin-top:25px;
+    border:1px solid #334155;
+
+}
+
+
+
+table {
+
+    width:100%;
+    border-collapse:collapse;
+    margin-top:15px;
+
+}
+
+
+th {
+
+    background:#334155;
+    text-align:left;
+    padding:12px;
+
+}
+
+
+td {
+
+    padding:12px;
+    border-bottom:1px solid #334155;
+
+}
+
+
+
+details {
+
+    background:#111827;
+    padding:15px;
+    border-radius:8px;
+    margin-top:15px;
+
+}
+
+
+summary {
+
+    cursor:pointer;
+    font-size:18px;
+    color:#60a5fa;
+
+}
+
+
+pre {
+
+    background:#020617;
+    padding:15px;
+    overflow:auto;
+    border-radius:8px;
+
+}
+
+
+
+input {
+
+    width:70%;
+    padding:12px;
+    background:#172033;
+    border:1px solid #475569;
+    color:white;
+    border-radius:5px;
+
+}
+
+
+
+.searchButton {
+
+    padding:12px 25px;
+    background:#2563eb;
+    color:white;
+    border:0;
+    border-radius:5px;
+    cursor:pointer;
+
+}
+
+
+</style>
+
+
+</head>
+
+
+
+<body>
+
+
+
+<header>
+
+<h1>
+Sentinel Security Orchestration Platform
+</h1>
+
+<div>
+Unified Cloud + Security + CMDB Inventory Platform
+</div>
+
+</header>
+
+
+
+
+<nav>
+
+<button onclick="showPage('dashboard')">
+Dashboard
+</button>
+
+
+<button onclick="showPage('search')">
+Resource Search
+</button>
+
+
+<button onclick="showPage('automation')">
+Automation Runs
+</button>
+
+
+</nav>
+
+
+
+
+
+<!-- ============================= -->
+<!-- DASHBOARD PAGE                -->
+<!-- ============================= -->
+
+
+<div id="dashboard" class="page active">
+
+
+<h2>
+Platform Dashboard
+</h2>
+
+
+
+<div class="cards">
+
+
+<div class="card">
+
+<h3>
+Total Assets
+</h3>
+
+<div class="metric">
+428,392
+</div>
+
+</div>
+
+
+
+
+<div class="card">
+
+<h3>
+AWS Accounts
+</h3>
+
+<div class="metric">
+27
+</div>
+
+</div>
+
+
+
+
+<div class="card">
+
+<h3>
+Collectors Healthy
+</h3>
+
+<div class="metric good">
+98.7%
+</div>
+
+</div>
+
+
+
+
+
+<div class="card">
+
+<h3>
+Automation Success
+</h3>
+
+<div class="metric good">
+99.4%
+</div>
+
+</div>
+
+
+
+</div>
+
+
+
+
+
+<div class="panel">
+
+
+<h2>
+Inventory Sources
+</h2>
+
+
+
+<table>
+
+
+<tr>
+
+<th>
+Source
+</th>
+
+<th>
+Objects
+</th>
+
+<th>
+Last Collection
+</th>
+
+<th>
+Status
+</th>
+
+</tr>
+
+
+
+<tr>
+
+<td>
+AWS
+</td>
+
+<td>
+184,322
+</td>
+
+<td>
+5 minutes ago
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+Azure
+</td>
+
+<td>
+102,443
+</td>
+
+<td>
+8 minutes ago
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+ServiceNow CMDB
+</td>
+
+<td>
+95,221
+</td>
+
+<td>
+12 minutes ago
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+Infoblox DNS
+</td>
+
+<td>
+1,200,321
+</td>
+
+<td>
+18 minutes ago
+</td>
+
+<td class="warning">
+Delayed
+</td>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+Wiz
+</td>
+
+<td>
+52,332 Findings
+</td>
+
+<td>
+45 minutes ago
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+Palo Alto
+</td>
+
+<td>
+18,421 Rules
+</td>
+
+<td>
+1 hour ago
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+</table>
+
+
+</div>
+
+
+
+
+
+
+<div class="panel">
+
+
+<h2>
+Recent Platform Activity
+</h2>
+
+
+
+<table>
+
+
+<tr>
+
+<th>
+Event
+</th>
+
+<th>
+Source
+</th>
+
+<th>
+Time
+</th>
+
+</tr>
+
+
+
+<tr>
+
+<td>
+New EC2 Instance Discovered
+</td>
+
+<td>
+aws-ec2-collector
+</td>
+
+<td>
+2 minutes ago
+</td>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+Firewall Rule Relationship Updated
+</td>
+
+<td>
+palo-policy-collector
+</td>
+
+<td>
+15 minutes ago
+</td>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+Critical Asset Ownership Mapped
+</td>
+
+<td>
+servicenow-ci-collector
+</td>
+
+<td>
+22 minutes ago
+</td>
+
+</tr>
+
+
+
+<tr>
+
+<td>
+Cloud Exposure Finding Updated
+</td>
+
+<td>
+wiz-collector
+</td>
+
+<td>
+40 minutes ago
+</td>
+
+</tr>
+
+
+</table>
+
+
+</div>
+
+
+
+</div>
+
+<!-- ============================= -->
+<!-- RESOURCE SEARCH PAGE          -->
+<!-- ============================= -->
+
+
+<div id="search" class="page">
+
+
+<h2>
+Resource Search
+</h2>
+
+
+<p>
+Search examples:
+<b>10.10.1.25</b>
+or
+<b>web-prod-01</b>
+</p>
+
+
+<input 
+id="searchInput"
+placeholder="IP address or hostname">
+
+
+<button class="searchButton" onclick="searchResource()">
+Search
+</button>
+
+
+
+<div id="resourceResult"></div>
+
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+<script>
+
+
+const resources = {
+
+
+"10.10.1.25": {
+
+
+hostname:"web-prod-01",
+
+ip:"10.10.1.25",
+
+cloud:"AWS",
+
+account:"Production",
+
+region:"us-east-1",
+
+instance:"i-09384839",
+
+vpc:"vpc-prod-main",
+
+subnet:"subnet-private-web",
+
+eni:"eni-848392",
+
+
+
+dns:[
+
+"web-prod.company.com",
+
+"checkout.company.com"
+
+],
+
+
+
+servicenow:{
+
+
+ci:"CI001928",
+
+owner:"Payments Team",
+
+service:"Checkout Platform",
+
+environment:"Production"
+
+
+},
+
+
+
+
+securityGroups:[
+
+
+{
+
+
+name:"web-prod-sg",
+
+
+rules:[
+
+
+{
+
+direction:"Inbound",
+
+protocol:"TCP",
+
+port:"443",
+
+source:"ALB-PROD-SG",
+
+description:"HTTPS Application Traffic"
+
+},
+
+
+{
+
+direction:"Inbound",
+
+protocol:"TCP",
+
+port:"22",
+
+source:"BASTION-SG",
+
+description:"Administrative SSH Access"
+
+},
+
+
+{
+
+direction:"Outbound",
+
+protocol:"ALL",
+
+port:"ALL",
+
+source:"0.0.0.0/0",
+
+description:"Internet Egress"
+
+}
+
+
+]
+
+
+},
+
+
+
+{
+
+
+name:"allow-alb",
+
+
+rules:[
+
+
+{
+
+direction:"Inbound",
+
+protocol:"TCP",
+
+port:"443",
+
+source:"Internet ALB",
+
+description:"Public HTTPS Listener"
+
+}
+
+
+]
+
+
+},
+
+
+
+{
+
+
+name:"monitoring",
+
+
+rules:[
+
+
+{
+
+direction:"Inbound",
+
+protocol:"TCP",
+
+port:"9100",
+
+source:"PROMETHEUS-SUBNET",
+
+description:"Node Metrics Collection"
+
+}
+
+
+]
+
+
+}
+
+
+
+],
+
+
+
+
+
+wiz:[
+
+
+{
+
+
+severity:"HIGH",
+
+finding:"Public Exposure",
+
+violation:
+"Production workloads cannot allow direct internet exposure",
+
+details:
+"Security Group permits traffic from 0.0.0.0/0"
+
+
+},
+
+
+
+{
+
+
+severity:"MEDIUM",
+
+finding:"Missing Security Metadata",
+
+violation:
+"Production assets require security ownership tags",
+
+details:
+"Owner metadata is incomplete"
+
+
+},
+
+
+
+{
+
+
+severity:"MEDIUM",
+
+finding:"Excessive Permissions",
+
+violation:
+"Administrative ports require restricted sources",
+
+details:
+"SSH access should be limited to approved jump hosts"
+
+}
+
+
+
+],
+
+
+
+
+
+paloalto:{
+
+
+device:"PA-FW-PROD-01",
+
+
+
+rules:[
+
+
+{
+
+
+name:"ALLOW-WEB-PROD-HTTPS",
+
+sourceZone:"WEB-PROD-ZONE",
+
+destinationZone:"APP-PROD-ZONE",
+
+service:"tcp-443",
+
+action:"allow"
+
+
+},
+
+
+
+{
+
+
+name:"ALLOW-MONITORING",
+
+sourceZone:"MONITORING",
+
+destinationZone:"WEB-PROD-ZONE",
+
+service:"tcp-9100",
+
+action:"allow"
+
+
+}
+
+
+
+],
+
+
+
+objects:{
+
+
+
+source:[
+
+"WEB-PROD-SERVERS",
+
+"PAYMENT-SUBNET"
+
+],
+
+
+destination:[
+
+"CHECKOUT-APPLICATION",
+
+"WEB-PROD-TIER"
+
+],
+
+
+
+groups:[
+
+
+{
+
+name:"WEB-PROD-SERVERS",
+
+members:[
+
+"web-prod-01",
+
+"web-prod-02",
+
+"web-prod-03"
+
+]
+
+
+},
+
+
+{
+
+name:"PAYMENT-SUBNET",
+
+members:[
+
+"10.10.1.0/24"
+
+]
+
+}
+
+
+
+]
+
+
+},
+
+
+
+
+nat:[
+
+
+{
+
+
+name:"NAT-221",
+
+original:"10.10.1.25",
+
+translated:"172.16.10.25",
+
+purpose:"Internet VIP Translation"
+
+
+}
+
+
+]
+
+
+
+}
+
+
+
+},
+
+
+
+
+
+
+"web-prod-01":null
+
+
+};
+
+
+
+// hostname lookup
+
+resources["web-prod-01"] =
+resources["10.10.1.25"];
+
+
+
+
+
+function searchResource(){
+
+
+
+let value =
+document
+.getElementById("searchInput")
+.value
+.toLowerCase()
+.trim();
+
+
+
+
+let asset =
+resources[value];
+
+
+
+let output =
+document.getElementById("resourceResult");
+
+
+
+if(!asset){
+
+
+output.innerHTML=`
+
+<div class="panel">
+
+<h3>
+Resource Not Found
+</h3>
+
+<p>
+Try:
+10.10.1.25
+</p>
+
+</div>
+
+`;
+
+return;
+
+}
+
+
+
+
+
+let sgHTML="";
+
+
+asset.securityGroups.forEach(function(sg){
+
+
+sgHTML += `
+
+
+<details open>
+
+
+<summary>
+
+Security Group:
+${sg.name}
+
+</summary>
+
+
+
+<table>
+
+
+<tr>
+
+<th>
+Direction
+</th>
+
+<th>
+Protocol
+</th>
+
+<th>
+Port
+</th>
+
+<th>
+Source
+</th>
+
+<th>
+Description
+</th>
+
+</tr>
+
+
+
+`;
+
+
+
+sg.rules.forEach(function(rule){
+
+
+sgHTML += `
+
+
+<tr>
+
+<td>
+${rule.direction}
+</td>
+
+<td>
+${rule.protocol}
+</td>
+
+<td>
+${rule.port}
+</td>
+
+<td>
+${rule.source}
+</td>
+
+<td>
+${rule.description}
+</td>
+
+</tr>
+
+
+`;
+
+
+});
+
+
+
+sgHTML +=`
+
+</table>
+
+</details>
+
+`;
+
+
+});
+
+
+
+
+
+
+
+let wizHTML="";
+
+
+asset.wiz.forEach(function(f){
+
+
+wizHTML +=`
+
+<tr>
+
+<td>
+${f.severity}
+</td>
+
+
+<td>
+${f.finding}
+</td>
+
+
+<td>
+${f.violation}
+<br>
+${f.details}
+</td>
+
+
+</tr>
+
+
+`;
+
+
+
+});
+
+
+
+
+
+
+let paloRules="";
+
+
+asset.paloalto.rules.forEach(function(rule){
+
+
+paloRules +=`
+
+<tr>
+
+<td>
+${rule.name}
+</td>
+
+<td>
+${rule.sourceZone}
+</td>
+
+<td>
+${rule.destinationZone}
+</td>
+
+<td>
+${rule.service}
+</td>
+
+<td>
+${rule.action}
+</td>
+
+</tr>
+
+
+`;
+
+
+
+});
+
+
+
+
+
+
+output.innerHTML = `
+
+
+<div class="panel">
+
+
+<h2>
+Asset Summary
+</h2>
+
+
+
+<table>
+
+
+<tr>
+<td>Hostname</td>
+<td>${asset.hostname}</td>
+</tr>
+
+
+<tr>
+<td>IP</td>
+<td>${asset.ip}</td>
+</tr>
+
+
+<tr>
+<td>Cloud</td>
+<td>${asset.cloud}</td>
+</tr>
+
+
+<tr>
+<td>Account</td>
+<td>${asset.account}</td>
+</tr>
+
+
+<tr>
+<td>Region</td>
+<td>${asset.region}</td>
+</tr>
+
+
+<tr>
+<td>Instance</td>
+<td>${asset.instance}</td>
+</tr>
+
+
+
+</table>
+
+
+
+
+<h2>
+Network Relationships
+</h2>
+
+
+<table>
+
+
+<tr>
+<td>VPC</td>
+<td>${asset.vpc}</td>
+</tr>
+
+
+<tr>
+<td>Subnet</td>
+<td>${asset.subnet}</td>
+</tr>
+
+
+<tr>
+<td>ENI</td>
+<td>${asset.eni}</td>
+</tr>
+
+
+<tr>
+<td>DNS</td>
+<td>${asset.dns.join("<br>")}</td>
+</tr>
+
+
+</table>
+
+
+
+
+
+<h2>
+AWS Security Groups
+</h2>
+
+
+${sgHTML}
+
+
+
+
+
+
+
+<h2>
+Wiz Findings
+</h2>
+
+
+<table>
+
+
+<tr>
+
+<th>
+Severity
+</th>
+
+<th>
+Finding
+</th>
+
+<th>
+Violation
+</th>
+
+</tr>
+
+
+${wizHTML}
+
+
+</table>
+
+
+
+
+
+<h2>
+Palo Alto Firewall Context
+</h2>
+
+
+<table>
+
+
+<tr>
+<td>
+Firewall
+</td>
+
+<td>
+${asset.paloalto.device}
+</td>
+
+</tr>
+
+
+</table>
+
+
+
+
+
+<h3>
+Security Rules
+</h3>
+
+
+<table>
+
+
+<tr>
+
+<th>
+Rule
+</th>
+
+<th>
+Source
+</th>
+
+<th>
+Destination
+</th>
+
+<th>
+Service
+</th>
+
+<th>
+Action
+</th>
+
+</tr>
+
+
+${paloRules}
+
+
+</table>
+
+
+
+
+
+<h3>
+Objects / Object Groups
+</h3>
+
+
+
+<pre>
+
+Source Objects:
+
+${asset.paloalto.objects.source.join("\n")}
+
+
+Destination Objects:
+
+${asset.paloalto.objects.destination.join("\n")}
+
+
+
+Object Groups:
+
+
+${JSON.stringify(asset.paloalto.objects.groups,null,2)}
+
+
+</pre>
+
+
+
+
+
+
+<h3>
+NAT Policies
+</h3>
+
+
+<pre>
+
+${JSON.stringify(asset.paloalto.nat,null,2)}
+
+</pre>
+
+
+
+
+
+<h2>
+ServiceNow CMDB
+
+</h2>
+
+
+
+<table>
+
+
+<tr>
+
+<td>
+CI
+</td>
+
+<td>
+${asset.servicenow.ci}
+</td>
+
+</tr>
+
+
+
+<tr>
+
+<td>
+Owner
+</td>
+
+<td>
+${asset.servicenow.owner}
+</td>
+
+</tr>
+
+
+
+<tr>
+
+<td>
+Business Service
+</td>
+
+<td>
+${asset.servicenow.service}
+</td>
+
+</tr>
+
+
+</table>
+
+
+
+
+
+
+
+<h2>
+Normalized JSONB Example
+</h2>
+
+
+
+<pre>
+
+{
+ "assetId":"asset-001",
+ "type":"server",
+ "hostname":"${asset.hostname}",
+ "ip":"${asset.ip}",
+ "cloud":"${asset.cloud}",
+ "relationships":[
+   "VPC",
+   "Subnet",
+   "SecurityGroups",
+   "FirewallRules",
+   "CMDB-CI"
+ ]
+}
+
+
+</pre>
+
+
+
+
+
+</div>
+
+
+`;
+
+
+
+}
+
+
+
+</script>
+
+<!-- ============================= -->
+<!-- AUTOMATION RUNS PAGE           -->
+<!-- ============================= -->
+
+
+<div id="automation" class="page">
+
+
+<h2>
+Automation Runs
+</h2>
+
+
+
+<div class="panel">
+
+
+<h3>
+Step Function Workflows
+</h3>
+
+
+<table>
+
+
+<tr>
+
+<th>
+Workflow
+</th>
+
+<th>
+Trigger
+</th>
+
+<th>
+Schedule
+</th>
+
+<th>
+Last Run
+</th>
+
+<th>
+Runtime
+</th>
+
+<th>
+Status
+</th>
+
+<th>
+Success Streak
+</th>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+Full Inventory Collection
+</td>
+
+<td>
+EventBridge
+</td>
+
+<td>
+Every 6 Hours
+</td>
+
+<td>
+35 minutes ago
+</td>
+
+<td>
+18m 42s
+</td>
+
+<td class="good">
+SUCCESS
+</td>
+
+<td>
+142
+</td>
+
+</tr>
+
+
+
+
+<tr>
+
+<td>
+Emergency Asset Refresh
+</td>
+
+<td>
+API / Manual
+</td>
+
+<td>
+On Demand
+</td>
+
+<td>
+Yesterday
+</td>
+
+<td>
+4m 11s
+</td>
+
+<td class="good">
+SUCCESS
+</td>
+
+<td>
+18
+</td>
+
+</tr>
+
+
+
+
+
+<tr>
+
+<td>
+Security Exposure Correlation
+</td>
+
+<td>
+Wiz Event
+</td>
+
+<td>
+Daily 01:00 UTC
+</td>
+
+<td>
+3 hours ago
+</td>
+
+<td>
+42m 10s
+</td>
+
+<td class="warning">
+RUNNING
+</td>
+
+<td>
+67
+</td>
+
+</tr>
+
+
+
+
+
+<tr>
+
+<td>
+Firewall Relationship Mapping
+</td>
+
+<td>
+Scheduled
+</td>
+
+<td>
+Every 4 Hours
+</td>
+
+<td>
+6 hours ago
+</td>
+
+<td>
+12m 03s
+</td>
+
+<td class="good">
+SUCCESS
+</td>
+
+<td>
+88
+</td>
+
+</tr>
+
+
+</table>
+
+
+</div>
+
+
+
+
+
+<div class="panel">
+
+
+<h3>
+Collector Lambda Health
+</h3>
+
+
+<table>
+
+
+<tr>
+
+<th>
+Lambda
+</th>
+
+<th>
+Purpose
+</th>
+
+<th>
+Trigger
+</th>
+
+<th>
+Schedule
+</th>
+
+<th>
+Last Run
+</th>
+
+<th>
+Runtime
+</th>
+
+<th>
+Failures
+</th>
+
+<th>
+Status
+</th>
+
+</tr>
+
+
+
+
+
+<tr>
+
+<td>
+aws-ec2-collector
+</td>
+
+<td>
+Collect EC2 Instances
+</td>
+
+<td>
+Step Function
+</td>
+
+<td>
+Every 30 Minutes
+</td>
+
+<td>
+12 min ago
+</td>
+
+<td>
+42 sec
+</td>
+
+<td>
+0
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+
+
+
+<tr>
+
+<td>
+aws-security-group-collector
+</td>
+
+<td>
+Collect Security Groups + Rules
+</td>
+
+<td>
+Step Function
+</td>
+
+<td>
+Hourly
+</td>
+
+<td>
+44 min ago
+</td>
+
+<td>
+1m 12s
+</td>
+
+<td>
+0
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+
+
+
+<tr>
+
+<td>
+servicenow-ci-collector
+</td>
+
+<td>
+CMDB CI Synchronization
+</td>
+
+<td>
+Step Function
+</td>
+
+<td>
+Every 2 Hours
+</td>
+
+<td>
+1h 30m ago
+</td>
+
+<td>
+3m 02s
+</td>
+
+<td>
+1
+</td>
+
+<td class="warning">
+Warning
+</td>
+
+</tr>
+
+
+
+
+
+<tr>
+
+<td>
+infoblox-dns-collector
+</td>
+
+<td>
+DNS Records + IP Ownership
+</td>
+
+<td>
+EventBridge
+</td>
+
+<td>
+Every Hour
+</td>
+
+<td>
+18 min ago
+</td>
+
+<td>
+5m 14s
+</td>
+
+<td>
+0
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+
+
+
+<tr>
+
+<td>
+wiz-security-collector
+</td>
+
+<td>
+Cloud Security Findings
+</td>
+
+<td>
+EventBridge
+</td>
+
+<td>
+Daily
+</td>
+
+<td>
+22 hours ago
+</td>
+
+<td>
+8m 12s
+</td>
+
+<td>
+0
+</td>
+
+<td class="good">
+Healthy
+</td>
+
+</tr>
+
+
+
+
+
+<tr>
+
+<td>
+paloalto-policy-collector
+</td>
+
+<td>
+Firewall Rules / Objects / NAT
+</td>
+
+<td>
+Step Function
+</td>
+
+<td>
+Every 4 Hours
+</td>
+
+<td>
+3h ago
+</td>
+
+<td>
+2m 45s
+</td>
+
+<td>
+3
+</td>
+
+<td class="bad">
+Failed
+</td>
+
+</tr>
+
+
+
+</table>
+
+
+</div>
+
+
+
+
+
+
+
+<div class="panel">
+
+
+<h3>
+Example Step Function Execution
+</h3>
+
+
+<pre>
+
+
+START
+
+ |
+
+ v
+
+
+Inventory Collection Workflow
+
+
+ |
+
+ v
+
+
+Approval Required?
+
+        /        \
+
+      YES        NO
+
+       |          |
+
+Manual Approval  Continue
+
+
+        \        /
+
+          v
+
+
+Parallel Map
+
+
+ ------------------------------------------------
+
+ |              |              |                |
+
+AWS Lambda   Azure Lambda   DNS Lambda   Security Lambda
+
+
+ |              |              |                |
+
+ ------------------------------------------------
+
+
+          |
+
+          v
+
+
+Normalize JSON
+
+
+          |
+
+          v
+
+
+Correlation Engine
+
+
+          |
+
+          v
+
+
+Aurora JSONB Update
+
+
+          |
+
+          v
+
+
+COMPLETE
+
+
+</pre>
+
+
+</div>
+
+
+
+</div>
+
+
+
+
+
+
+
+<script>
+
+
+function showPage(pageName){
+
+
+let pages =
+document.querySelectorAll(".page");
+
+
+pages.forEach(function(page){
+
+
+page.classList.remove("active");
+
+
+});
+
+
+
+document
+.getElementById(pageName)
+.classList.add("active");
+
+
+
+}
+
+
+
+</script>
+
+
+
+
+
+</body>
+
+
+</html>
