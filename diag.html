@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Security Inventory Platform Architecture</title>
+</head>
+
+<body>
+
+<h1>Security Inventory / Orchestration Platform</h1>
+
+<hr>
+
+<h2>Triggers</h2>
+
+<table border="1" cellpadding="10">
+
+<tr>
+
+<td>EventBridge<br>Scheduled</td>
+
+<td>Manual Run<br>GUI</td>
+
+<td>REST API<br>Start Collection</td>
+
+</tr>
+
+</table>
+
+<br>
+
+↓
+
+<h2>Step Functions</h2>
+
+<details open>
+
+<summary><b>Inventory Collection Workflow</b></summary>
+
+<ul>
+
+<li>Scheduled Inventory</li>
+
+<li>Manual Execution</li>
+
+<li>REST API Trigger</li>
+
+<li>Optional Manual Approval</li>
+
+<li>Parallel Collector Execution</li>
+
+<li>Retry Failed Collectors</li>
+
+<li>Skip Failed Collectors</li>
+
+<li>Aggregate Results</li>
+
+<li>Notify Completion</li>
+
+</ul>
+
+</details>
+
+<pre>
+
+             START
+
+               |
+
+        Approval Required?
+
+        /              \
+
+      YES              NO
+
+       |                |
+
+ Manual Approval     Continue
+
+        \              /
+
+         --------------
+
+               |
+
+        PARALLEL MAP
+
+      /    |    |    \
+
+    AWS Azure SNOW Network
+
+       \   |    |   /
+
+        Aggregate
+
+            |
+
+         Complete
+
+</pre>
+
+<hr>
+
+<h2>Collector Lambdas</h2>
+
+<table border="1" cellpadding="8">
+
+<tr>
+
+<th>AWS</th>
+
+<th>Azure</th>
+
+<th>Enterprise</th>
+
+<th>Security</th>
+
+</tr>
+
+<tr>
+
+<td>
+
+aws-ec2<br>
+
+aws-vpc<br>
+
+aws-subnet<br>
+
+aws-sg<br>
+
+aws-eni<br>
+
+aws-route-table<br>
+
+aws-iam
+
+</td>
+
+<td>
+
+azure-vm<br>
+
+azure-vnet<br>
+
+azure-nsg<br>
+
+azure-nic<br>
+
+azure-routes
+
+</td>
+
+<td>
+
+servicenow-ci<br>
+
+servicenow-service<br>
+
+infoblox-dns<br>
+
+infoblox-network<br>
+
+palo-policy<br>
+
+palo-address
+
+</td>
+
+<td>
+
+wiz<br>
+
+algosec<br>
+
+crowdstrike<br>
+
+microsoft-defender
+
+</td>
+
+</tr>
+
+</table>
+
+<br>
+
+↓
+
+<hr>
+
+<h2>S3 Raw Inventory Lake</h2>
+
+<p>
+Every collector writes its native API response to S3.
+</p>
+
+<details>
+
+<summary>AWS EC2 Native JSONB</summary>
+
+<pre>
+{
+  "InstanceId":"i-012345",
+  "VpcId":"vpc-12345",
+  "SubnetId":"subnet-456",
+  "PrivateIpAddress":"10.0.1.25",
+  "SecurityGroups":[
+      {"GroupId":"sg-111"}
+  ],
+  "Tags":[
+      {"Key":"Name","Value":"WEB01"}
+  ]
+}
+</pre>
+
+</details>
+
+<details>
+
+<summary>ServiceNow Native JSONB</summary>
+
+<pre>
+{
+ "sys_id":"8d2312",
+ "name":"WEB01",
+ "owned_by":"Payments",
+ "assignment_group":"Cloud Ops",
+ "business_service":"Checkout"
+}
+</pre>
+
+</details>
+
+<details>
+
+<summary>Palo Alto Native JSONB</summary>
+
+<pre>
+{
+ "rule":"Allow HTTPS",
+ "source":"10.0.1.25",
+ "destination":"Any",
+ "service":"tcp-443",
+ "action":"allow"
+}
+</pre>
+
+</details>
+
+<br>
+
+↓
+
+<hr>
+
+<h2>Correlation & Inventory Engine</h2>
+
+<ul>
+
+<li>Read Native JSON</li>
+
+<li>Normalize Fields</li>
+
+<li>Deduplicate Assets</li>
+
+<li>Correlate Resources</li>
+
+<li>Build Relationships</li>
+
+<li>Create Generic Inventory Objects</li>
+
+<li>Write to Aurora</li>
+
+<li>Generate Excel Workbook</li>
+
+</ul>
+
+<hr>
+
+<h2>Generic JSONB Examples</h2>
+
+<table border="1" cellpadding="10">
+
+<tr>
+
+<th>Server Asset</th>
+
+<th>Network Asset</th>
+
+</tr>
+
+<tr>
+
+<td>
+
+<pre>
+{
+ "assetId":"asset-001",
+ "type":"server",
+ "hostname":"WEB01",
+ "ip":"10.0.1.25",
+ "cloud":"aws",
+ "providerId":"i-012345",
+ "owner":"Payments",
+ "businessService":"Checkout",
+ "nativeSources":[
+   "aws",
+   "servicenow"
+ ]
+}
+</pre>
+
+</td>
+
+<td>
+
+<pre>
+{
+ "networkId":"network-100",
+ "type":"subnet",
+ "cloud":"aws",
+ "vpc":"vpc-12345",
+ "subnet":"subnet-456",
+ "cidr":"10.0.1.0/24"
+}
+</pre>
+
+</td>
+
+</tr>
+
+</table>
+
+↓
+
+<hr>
+
+<h2>Aurora PostgreSQL</h2>
+
+<table border="1" cellpadding="8">
+
+<tr>
+
+<th>Normalized Tables</th>
+
+<th>JSONB Storage</th>
+
+</tr>
+
+<tr>
+
+<td>
+
+Assets<br>
+
+Networks<br>
+
+DNS<br>
+
+Security Groups<br>
+
+Firewall Rules<br>
+
+Relationships<br>
+
+Applications<br>
+
+Owners
+
+</td>
+
+<td>
+
+raw_jsonb<br>
+
+normalized_jsonb<br>
+
+metadata_jsonb
+
+</td>
+
+</tr>
+
+</table>
+
+<hr>
+
+<h2>REST API</h2>
+
+<pre>
+
+GET /search?q=10.0.1.25
+
+↓
+
+Aurora
+
+↓
+
+Return Unified Asset
+
+</pre>
+
+<hr>
+
+<h2>GUI</h2>
+
+<ul>
+
+<li>Dashboard</li>
+
+<li>Automation Runs</li>
+
+<li>Resource Search</li>
+
+<li>Asset Explorer</li>
+
+<li>Relationship Graph</li>
+
+<li>Topology Viewer</li>
+
+<li>Cloud Inventory</li>
+
+<li>Excel Export</li>
+
+</ul>
+
+<hr>
+
+<h2>Example Search</h2>
+
+Searching
+
+<pre>
+
+10.0.1.25
+
+↓
+
+AWS EC2
+
+↓
+
+ENI
+
+↓
+
+Security Groups
+
+↓
+
+Subnet
+
+↓
+
+VPC
+
+↓
+
+DNS
+
+↓
+
+ServiceNow CI
+
+↓
+
+Firewall Rules
+
+↓
+
+Business Service
+
+↓
+
+Owner
+
+</pre>
+
+<hr>
+
+<h2>Future Resource Types</h2>
+
+<ul>
+
+<li>AWS Lambda</li>
+
+<li>RDS</li>
+
+<li>EKS</li>
+
+<li>Azure AKS</li>
+
+<li>Azure SQL</li>
+
+<li>Kubernetes</li>
+
+<li>Certificates</li>
+
+<li>IAM Roles</li>
+
+<li>Secrets</li>
+
+<li>Applications</li>
+
+<li>Containers</li>
+
+<li>Load Balancers</li>
+
+<li>VPNs</li>
+
+<li>Transit Gateways</li>
+
+</ul>
+
+</body>
+</html>
