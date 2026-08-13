@@ -1,0 +1,10 @@
+curl -k -X POST "https://PANORAMA-IP/api/?type=keygen" \
+  -d "user=YOUR_USERNAME" \
+  -d "password=YOUR_PASSWORD"
+
+curl -k -G "https://PANORAMA-IP/api/" \
+  --data-urlencode "type=config" \
+  --data-urlencode "action=show" \
+  --data-urlencode "key=YOUR_API_KEY" \
+  -o panorama-config.xml
+
