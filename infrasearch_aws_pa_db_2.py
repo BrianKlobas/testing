@@ -14,6 +14,7 @@ Then open:
     http://localhost:8080
 """
 
+from __main__ import *
 from __future__ import annotations
 
 import argparse
@@ -211,10 +212,10 @@ class InfrastructureDataSource:
                     org_data = json.load(f)
                     def count_accounts(node):
                         cnt = len(node.get("Accounts", []))
-                        for ou in node.get("OUs", []):
+                        for ou in (node.get("OUs", []) or node.get("Children", []) or node.get("OrganizationalUnits", [])):
                             cnt += count_accounts(ou)
                         return cnt
-                    aws_accounts_count = count_accounts(org_data.get("Hierarchy", {}))
+                    aws_accounts_count = count_accounts(org_data.get("Hierarchy", {}) or org_data)
             except Exception:
                 aws_accounts_count = 0
 
@@ -276,7 +277,7 @@ class InfrastructureDataSource:
         cursor = conn.cursor()
 
         matched_aws_record_ids = set()
-        matched_sg_keys = set()
+        matched_sg_ids = set() # Store precise SG IDs and account scope
         pending_aws_lookups = []
 
         # 1. Initial Match Search (by Network overlap or Text/ID search)
@@ -360,20 +361,14 @@ class InfrastructureDataSource:
 
                 for group in item.get("SecurityGroups", []):
                     sg_id = group.get("GroupId")
-                    sg_name = group.get("GroupName")
                     if sg_id:
-                        matched_sg_keys.add((dev_name, sg_id))
-                    if sg_name:
-                        matched_sg_keys.add((dev_name, sg_name))
+                        matched_sg_ids.add((dev_name, sg_id))
 
             elif "eni" in cat.lower():
                 for group in item.get("Groups", []):
                     sg_id = group.get("GroupId")
-                    sg_name = group.get("GroupName")
                     if sg_id:
-                        matched_sg_keys.add((dev_name, sg_id))
-                    if sg_name:
-                        matched_sg_keys.add((dev_name, sg_name))
+                        matched_sg_ids.add((dev_name, sg_id))
                 
                 attachment = item.get("Attachment", {})
                 att_inst_id = attachment.get("InstanceId")
@@ -392,21 +387,20 @@ class InfrastructureDataSource:
                 for group in item.get("VpcSecurityGroups", []):
                     sg_id = group.get("VpcSecurityGroupId")
                     if sg_id:
-                        matched_sg_keys.add((dev_name, sg_id))
+                        matched_sg_ids.add((dev_name, sg_id))
 
-        # 3. Fetch All Associated Security Groups (Robust category & ID match)
-        for dev_name, sg_key in matched_sg_keys:
+        # 3. Fetch All Associated Security Groups strictly by GroupId and Account scope
+        for dev_name, sg_id in matched_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
                 WHERE (r.category LIKE '%security_group%' OR r.category LIKE '%sg%')
-                  AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
-            """, (sg_key, f'%"{sg_key}"%', dev_name))
+                  AND (r.name = ? OR json_extract(r.data, '$.GroupId') = ?) AND d.name = ?
+            """, (sg_id, sg_id, dev_name))
             
             for sg_row in cursor.fetchall():
                 sg_item = json.loads(sg_row["data"])
-                # Unique check using record ID to prevent skipping different security groups
                 exists = any(s.get("record_id") == sg_row["id"] for s in output["attached_security_groups"])
                 if not exists:
                     output["attached_security_groups"].append({
@@ -757,7 +751,6 @@ function renderProperties(obj) {
     if (!obj || typeof obj !== 'object') return '';
     let html = `<table class="prop-table">`;
     
-    // Explicitly show Security Group Name and ID if present
     if (obj.GroupId || obj.GroupName) {
         html += `<tr><th>Security Group ID</th><td>${esc(obj.GroupId || 'N/A')}</td></tr>`;
         html += `<tr><th>Security Group Name</th><td>${esc(obj.GroupName || 'N/A')}</td></tr>`;
@@ -888,15 +881,17 @@ async function loadOrgTopology() {
     document.getElementById("orgMeta").textContent = `Org ID: ${org.OrganizationId || 'N/A'} | Root: ${org.RootName || 'Root'}`;
 
     function renderNode(node, openDefault = true) {
-        const nodeName = node.Name || node.Path || "Root OU";
-        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 <b>${esc(nodeName)}</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${node.Accounts ? node.Accounts.length : 0} accounts)</span></summary>`;
+        const nodeName = node.Name || node.Path || node.OrganizationalUnitName || "Root OU";
+        const accounts = node.Accounts || node.AccountList || [];
         
-        if (node.Accounts && node.Accounts.length > 0) {
+        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 <b>${esc(nodeName)}</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${accounts.length} accounts)</span></summary>`;
+        
+        if (accounts.length > 0) {
             html += `<div class="org-accounts">`;
-            for (const acc of node.Accounts) {
-                const accName = acc.Name || acc.AccountName || "Unnamed Account";
-                const accId = acc.Id || acc.AccountId || "";
-                const status = acc.Status || "ACTIVE";
+            for (const acc of accounts) {
+                const accName = acc.Name || acc.AccountName || acc.Account?.Name || "Unnamed Account";
+                const accId = acc.Id || acc.AccountId || acc.Account?.Id || "";
+                const status = acc.Status || acc.AccountStatus || "ACTIVE";
                 html += `<div class="account-badge">🖥️ <b>${esc(accName)}</b> &bull; <code>${esc(accId)}</code> <span style="color:#64748b;">[${esc(status)}]</span></div>`;
             }
             html += `</div>`;
@@ -904,7 +899,7 @@ async function loadOrgTopology() {
             html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No direct accounts in this level.</div>`;
         }
 
-        const subOus = node.OUs || node.Children || node.OrganizationalUnits || [];
+        const subOus = node.OUs || node.Children || node.OrganizationalUnits || node.SubOUs || [];
         if (subOus.length > 0) {
             html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
             for (const ou of subOus) {
