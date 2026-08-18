@@ -359,15 +359,21 @@ class InfrastructureDataSource:
                             pending_aws_lookups.append((eni_row, []))
 
                 for group in item.get("SecurityGroups", []):
-                    sg_id = group.get("GroupId") or group.get("GroupName")
+                    sg_id = group.get("GroupId")
+                    sg_name = group.get("GroupName")
                     if sg_id:
                         matched_sg_keys.add((dev_name, sg_id))
+                    if sg_name:
+                        matched_sg_keys.add((dev_name, sg_name))
 
             elif "eni" in cat.lower():
                 for group in item.get("Groups", []):
-                    sg_id = group.get("GroupId") or group.get("GroupName")
+                    sg_id = group.get("GroupId")
+                    sg_name = group.get("GroupName")
                     if sg_id:
                         matched_sg_keys.add((dev_name, sg_id))
+                    if sg_name:
+                        matched_sg_keys.add((dev_name, sg_name))
                 
                 attachment = item.get("Attachment", {})
                 att_inst_id = attachment.get("InstanceId")
@@ -389,20 +395,22 @@ class InfrastructureDataSource:
                         matched_sg_keys.add((dev_name, sg_id))
 
         # 3. Fetch All Associated Security Groups (Robust category & ID match)
-        for dev_name, sg_id in matched_sg_keys:
+        for dev_name, sg_key in matched_sg_keys:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
                 WHERE (r.category LIKE '%security_group%' OR r.category LIKE '%sg%')
                   AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
-            """, (sg_id, f'%"{sg_id}"%', dev_name))
+            """, (sg_key, f'%"{sg_key}"%', dev_name))
             
             for sg_row in cursor.fetchall():
                 sg_item = json.loads(sg_row["data"])
-                exists = any(s["name"] == sg_row["name"] and s["device"] == sg_row["device"] for s in output["attached_security_groups"])
+                # Unique check using record ID to prevent skipping different security groups
+                exists = any(s.get("record_id") == sg_row["id"] for s in output["attached_security_groups"])
                 if not exists:
                     output["attached_security_groups"].append({
+                        "record_id": sg_row["id"],
                         "device": sg_row["device"],
                         "type": sg_row["category"],
                         "file": sg_row["filename"],
@@ -613,8 +621,6 @@ pre { background: #0f172a; color: #e2e8f0; border-radius: 6px; padding: 14px; ov
 details { margin-top: 10px; }
 summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
-.empty { padding: 40px; background: var(--bg-card); border-radius: 10px; text-align: center; color: var(--text-secondary); border: 1px solid var(--border-color); }
-
 /* Tree & Properties Views */
 .org-tree details { margin: 6px 0; background: #ffffff; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; }
 .org-tree summary { font-weight: 600; color: #1e293b; font-size: 14px; outline: none; }
@@ -632,6 +638,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 .prop-table td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; color: #1e293b; font-family: monospace; word-break: break-all; }
 .prop-table tr:last-child td { border-bottom: none; }
 .sub-table-header { font-weight: 600; font-size: 12px; color: #64748b; margin: 12px 0 4px 0; text-transform: uppercase; letter-spacing: 0.5px; }
+.rule-tag { display: inline-block; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid #cbd5e1; }
 </style>
 </head>
 
@@ -749,8 +756,15 @@ function section(title, count, body) {
 function renderProperties(obj) {
     if (!obj || typeof obj !== 'object') return '';
     let html = `<table class="prop-table">`;
-    const priorityKeys = ['InstanceId', 'NetworkInterfaceId', 'GroupId', 'GroupName', 'VpcId', 'SubnetId', 'PrivateIpAddress', 'State', 'InstanceType', 'Platform', 'Description'];
-    const renderedKeys = new Set();
+    
+    // Explicitly show Security Group Name and ID if present
+    if (obj.GroupId || obj.GroupName) {
+        html += `<tr><th>Security Group ID</th><td>${esc(obj.GroupId || 'N/A')}</td></tr>`;
+        html += `<tr><th>Security Group Name</th><td>${esc(obj.GroupName || 'N/A')}</td></tr>`;
+    }
+
+    const priorityKeys = ['InstanceId', 'NetworkInterfaceId', 'VpcId', 'SubnetId', 'PrivateIpAddress', 'State', 'InstanceType', 'Platform', 'Description'];
+    const renderedKeys = new Set(['GroupId', 'GroupName']);
 
     for (const k of priorityKeys) {
         if (obj[k] !== undefined && obj[k] !== null && obj[k] !== "") {
@@ -778,15 +792,23 @@ function itemHTML(x, badgeClass) {
     
     if (x.type && x.type.includes('security_group') && x.data.IpPermissions) {
         extraDetails += `<div class="sub-table-header">Inbound Rules (IpPermissions)</div>`;
-        extraDetails += `<table class="prop-table"><tr><th>Protocol</th><th>From Port</th><th>To Port</th><th>Source / CIDR</th></tr>`;
+        extraDetails += `<table class="prop-table"><tr><th>Protocol</th><th>Port Range</th><th>Source (CIDRs / Groups)</th></tr>`;
         for (const perm of (x.data.IpPermissions || [])) {
             const proto = perm.IpProtocol === '-1' ? 'All' : (perm.IpProtocol || 'Any');
-            const fPort = perm.FromPort !== undefined ? perm.FromPort : 'Any';
-            const tPort = perm.ToPort !== undefined ? perm.ToPort : 'Any';
+            let portStr = 'All';
+            if (perm.FromPort !== undefined && perm.ToPort !== undefined) {
+                portStr = perm.FromPort === perm.ToPort ? `${perm.FromPort}` : `${perm.FromPort} - ${perm.ToPort}`;
+            }
+            
             const sources = [];
-            for (const ipR of (perm.IpRanges || [])) sources.push(ipR.CidrIp);
-            for (const pvR of (perm.UserIdGroupPairs || [])) sources.push(pvR.GroupId || pvR.GroupName);
-            extraDetails += `<tr><td>${esc(proto)}</td><td>${esc(fPort)}</td><td>${esc(tPort)}</td><td><code>${esc(sources.join(', ') || 'Any')}</code></td></tr>`;
+            for (const ipR of (perm.IpRanges || [])) {
+                sources.push(`<code class="rule-tag">${esc(ipR.CidrIp)}${ipR.Description ? ' (' + esc(ipR.Description) + ')' : ''}</code>`);
+            }
+            for (const pvR of (perm.UserIdGroupPairs || [])) {
+                sources.push(`<code class="rule-tag">SG: ${esc(pvR.GroupId || pvR.GroupName)}</code>`);
+            }
+            
+            extraDetails += `<tr><td>${esc(proto)}</td><td>${esc(portStr)}</td><td>${sources.join(' ') || 'Any'}</td></tr>`;
         }
         extraDetails += `</table>`;
     }
