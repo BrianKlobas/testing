@@ -14,7 +14,6 @@ Then open:
     http://localhost:8080
 """
 
-from __main__ import *
 from __future__ import annotations
 
 import argparse
@@ -39,12 +38,16 @@ PAN_TOPOLOGY_PATH = Path("panorama_topology.json").resolve()
 # Database Initialization & Indexing Engine
 # ----------------------------------------------------------------------
 
-def get_db(db_file: Path = DB_PATH):
+def get_db(db_file: Path | None = None):
+    if db_file is None:
+        db_file = DB_PATH
     conn = sqlite3.connect(db_file)
     conn.row_factory = sqlite3.Row
     return conn
 
-def init_db(db_file: Path = DB_PATH):
+def init_db(db_file: Path | None = None):
+    if db_file is None:
+        db_file = DB_PATH
     if db_file.exists():
         db_file.unlink()
         
@@ -79,7 +82,9 @@ def init_db(db_file: Path = DB_PATH):
     conn.commit()
     conn.close()
 
-def ingest_data(fw_root: Path, aws_root: Path, db_file: Path = DB_PATH):
+def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
+    if db_file is None:
+        db_file = DB_PATH
     init_db(db_file)
     conn = get_db(db_file)
     cursor = conn.cursor()
@@ -192,8 +197,12 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path = DB_PATH):
 # ----------------------------------------------------------------------
 
 class InfrastructureDataSource:
-    def __init__(self, db_file: Path = DB_PATH):
-        self.db_file = db_file
+    def __init__(self, db_file: Path | None = None):
+        self._db_file = db_file
+
+    @property
+    def db_file(self) -> Path:
+        return self._db_file if self._db_file is not None else DB_PATH
 
     def get_stats(self) -> dict[str, Any]:
         conn = get_db(self.db_file)
@@ -211,8 +220,8 @@ class InfrastructureDataSource:
                 with ORG_FILE_PATH.open("r", encoding="utf-8") as f:
                     org_data = json.load(f)
                     def count_accounts(node):
-                        cnt = len(node.get("Accounts", []))
-                        for ou in (node.get("OUs", []) or node.get("Children", []) or node.get("OrganizationalUnits", [])):
+                        cnt = len(node.get("Accounts", []) or node.get("AccountList", []))
+                        for ou in (node.get("OUs", []) or node.get("Children", []) or node.get("OrganizationalUnits", []) or node.get("SubOUs", [])):
                             cnt += count_accounts(ou)
                         return cnt
                     aws_accounts_count = count_accounts(org_data.get("Hierarchy", {}) or org_data)
@@ -277,7 +286,15 @@ class InfrastructureDataSource:
         cursor = conn.cursor()
 
         matched_aws_record_ids = set()
-        matched_sg_ids = set() # Store precise SG IDs and account scope
+        matched_sg_ids = set()
+        discovered_ips = set()
+        if query_network:
+            discovered_ips.add(query_network.compressed)
+        else:
+            potential_ip = self.parse_network(query)
+            if potential_ip:
+                discovered_ips.add(potential_ip.compressed)
+
         pending_aws_lookups = []
 
         # 1. Initial Match Search (by Network overlap or Text/ID search)
@@ -326,7 +343,7 @@ class InfrastructureDataSource:
                     matched_aws_record_ids.add(row["id"])
                     pending_aws_lookups.append((row, []))
 
-        # 2. Cascading Relationship Discovery (Instance ID -> ENIs -> Security Groups)
+        # 2. Cascading Relationship Discovery & IP Extraction
         processed_count = 0
         while processed_count < len(pending_aws_lookups):
             row, hits = pending_aws_lookups[processed_count]
@@ -345,7 +362,10 @@ class InfrastructureDataSource:
             cat = row["category"]
             dev_name = row["device"]
 
-            # If it's an EC2 Instance, harvest its ENIs, Security Groups
+            # Dynamically extract IPs from discovered AWS records
+            for _, net in self.extract_networks_from_text(row["data"]):
+                discovered_ips.add(net.compressed)
+
             if cat == "ec2_instances":
                 inst_id = item.get("InstanceId")
                 if inst_id:
@@ -412,23 +432,33 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # 4. Search PAN-OS Firewall Address Objects, Rules, & DNS objects
-        pan_query = query_network.compressed if query_network else query
-        cursor.execute("""
-            SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
-            FROM records r
-            JOIN devices d ON r.device_id = d.id
-            WHERE r.platform = 'panos' AND (r.name LIKE ? OR r.data LIKE ?)
-        """, (f"%{pan_query}%", f"%{pan_query}%"))
-        
-        for row in cursor.fetchall():
-            output["matched_addresses"].append({
-                "device": row["device"],
-                "type": row["category"],
-                "file": row["filename"],
-                "name": row["name"],
-                "data": json.loads(row["data"])
-            })
+        # 4. Search PAN-OS Firewall Objects & Rules using Query + Discovered IPs
+        pan_queries = set(discovered_ips)
+        if query:
+            pan_queries.add(query)
+
+        matched_panos_ids = set()
+        for pan_q in pan_queries:
+            p_net = self.parse_network(pan_q)
+            p_term = p_net.compressed if p_net else pan_q
+
+            cursor.execute("""
+                SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+                FROM records r
+                JOIN devices d ON r.device_id = d.id
+                WHERE r.platform = 'panos' AND (r.name LIKE ? OR r.data LIKE ?)
+            """, (f"%{p_term}%", f"%{p_term}%"))
+            
+            for row in cursor.fetchall():
+                if row["id"] not in matched_panos_ids:
+                    matched_panos_ids.add(row["id"])
+                    output["matched_addresses"].append({
+                        "device": row["device"],
+                        "type": row["category"],
+                        "file": row["filename"],
+                        "name": row["name"],
+                        "data": json.loads(row["data"])
+                    })
 
         output["summary"] = {
             "aws_resources": len(output["aws_matches"]),
@@ -441,7 +471,7 @@ class InfrastructureDataSource:
         return output
 
 
-PANOS = InfrastructureDataSource(DB_PATH)
+PANOS = InfrastructureDataSource()
 
 
 # ----------------------------------------------------------------------
@@ -665,7 +695,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 <b>Deep Cascade:</b> Searching an Instance ID automatically surfaces its EC2 details, attached ENIs with IPs, and bound Security Groups with inbound/outbound rules.
+                💡 <b>Deep Cascade:</b> Searching an Instance ID automatically surfaces its EC2 details, attached ENIs, bound Security Groups, and correlates its IPs to Palo Alto rules.
             </div>
         </div>
 
@@ -878,13 +908,15 @@ async function loadOrgTopology() {
         container.innerHTML = `<div class="empty">${esc(org.error)}</div>`;
         return;
     }
-    document.getElementById("orgMeta").textContent = `Org ID: ${org.OrganizationId || 'N/A'} | Root: ${org.RootName || 'Root'}`;
+    document.getElementById("orgMeta").textContent = `Org ID: ${org.OrganizationId || 'N/A'} | Root: ${org.RootName || org.Name || 'Root'}`;
 
     function renderNode(node, openDefault = true) {
-        const nodeName = node.Name || node.Path || node.OrganizationalUnitName || "Root OU";
+        if (!node || typeof node !== 'object') return '';
+        const nodeName = node.Name || node.Path || node.OrganizationalUnitName || node.Id || "Organizational Unit";
         const accounts = node.Accounts || node.AccountList || [];
+        const subOus = node.OUs || node.Children || node.OrganizationalUnits || node.SubOUs || [];
         
-        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 <b>${esc(nodeName)}</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${accounts.length} accounts)</span></summary>`;
+        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 <b>${esc(nodeName)}</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${accounts.length} accounts, ${subOus.length} sub-OUs)</span></summary>`;
         
         if (accounts.length > 0) {
             html += `<div class="org-accounts">`;
@@ -895,17 +927,18 @@ async function loadOrgTopology() {
                 html += `<div class="account-badge">🖥️ <b>${esc(accName)}</b> &bull; <code>${esc(accId)}</code> <span style="color:#64748b;">[${esc(status)}]</span></div>`;
             }
             html += `</div>`;
-        } else {
-            html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No direct accounts in this level.</div>`;
         }
 
-        const subOus = node.OUs || node.Children || node.OrganizationalUnits || node.SubOUs || [];
         if (subOus.length > 0) {
             html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
             for (const ou of subOus) {
                 html += renderNode(ou, false);
             }
             html += `</div>`;
+        }
+
+        if (accounts.length === 0 && subOus.length === 0) {
+            html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No direct accounts or sub-OUs in this level.</div>`;
         }
         
         html += `</details>`;
