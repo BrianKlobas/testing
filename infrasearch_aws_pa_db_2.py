@@ -31,6 +31,7 @@ DB_PATH = Path("infra_intel.db")
 FW_DATA_ROOT = Path("parsed").resolve()
 AWS_DATA_ROOT = Path("aws_parsed").resolve()
 ORG_FILE_PATH = Path("org_topology.json").resolve()
+EXCLUDED_SG_NAMES = {"default", "name2"}
 
 # ----------------------------------------------------------------------
 # Database Initialization & Indexing Engine
@@ -340,10 +341,14 @@ class InfrastructureDataSource:
 
             output["aws_matches"] = aws_matches
 
-            # Fetch ONLY the directly attached Security Groups
+            # Fetch ONLY the directly attached Security Groups (excluding ignored ones)
             attached_sgs = []
             if matched_sg_ids:
                 for dev_name, sg_id in matched_sg_ids:
+                    # Skip if excluded by ID or Name
+                    if sg_id in EXCLUDED_SG_IDS:
+                        continue
+                        
                     cursor.execute("""
                         SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                         FROM records r
@@ -352,12 +357,17 @@ class InfrastructureDataSource:
                     """, (sg_id, dev_name))
                     sg_row = cursor.fetchone()
                     if sg_row:
+                        sg_data = json.loads(sg_row["data"])
+                        sg_name = sg_data.get("GroupName", "")
+                        if sg_name in EXCLUDED_SG_NAMES:
+                            continue
+                            
                         attached_sgs.append({
                             "device": sg_row["device"],
                             "type": sg_row["category"],
                             "file": sg_row["filename"],
                             "name": sg_row["name"],
-                            "data": json.loads(sg_row["data"])
+                            "data": sg_data
                         })
             output["attached_security_groups"] = attached_sgs
 
