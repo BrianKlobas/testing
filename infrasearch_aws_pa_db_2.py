@@ -802,29 +802,42 @@ async function loadOrgTopology() {
         container.innerHTML = `<div class="empty">${esc(org.error)}</div>`;
         return;
     }
-    document.getElementById("orgMeta").textContent = `Org ID: ${org.OrganizationId} | Root: ${org.RootName}`;
+    document.getElementById("orgMeta").textContent = `Org ID: ${org.OrganizationId || 'N/A'} | Root: ${org.RootName || 'Root'}`;
 
     function renderNode(node, openDefault = true) {
-        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 ${esc(node.Path || node.Name)}</summary>`;
-        if (node.Accounts && node.Accounts.length) {
+        const nodeName = node.Name || node.Path || "Root OU";
+        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 <b>${esc(nodeName)}</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${node.Accounts ? node.Accounts.length : 0} accounts)</span></summary>`;
+        
+        // Render accounts directly belonging to this OU/Node
+        if (node.Accounts && node.Accounts.length > 0) {
             html += `<div class="org-accounts">`;
             for (const acc of node.Accounts) {
-                html += `<div class="account-badge">🖥️ <b>${esc(acc.Name)}</b> &bull; <code>${esc(acc.Id)}</code> <span style="color:#64748b;">[${esc(acc.Status)}]</span></div>`;
+                const accName = acc.Name || acc.AccountName || "Unnamed Account";
+                const accId = acc.Id || acc.AccountId || "";
+                const status = acc.Status || "ACTIVE";
+                html += `<div class="account-badge">🖥️ <b>${esc(accName)}</b> &bull; <code>${esc(accId)}</code> <span style="color:#64748b;">[${esc(status)}]</span></div>`;
             }
             html += `</div>`;
+        } else {
+            html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No direct accounts in this level.</div>`;
         }
-        if (node.OUs && node.OUs.length) {
-            html += `<div style="margin-top:6px; padding-left:10px;">`;
-            for (const ou of node.OUs) {
+
+        // Recursively render Sub-OUs
+        const subOus = node.OUs || node.Children || node.OrganizationalUnits || [];
+        if (subOus.length > 0) {
+            html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
+            for (const ou of subOus) {
                 html += renderNode(ou, false);
             }
             html += `</div>`;
         }
+        
         html += `</details>`;
         return html;
     }
 
-    container.innerHTML = renderNode(org.Hierarchy, true);
+    const hierarchyRoot = org.Hierarchy || org;
+    container.innerHTML = renderNode(hierarchyRoot, true);
 }
 
 async function loadStats() {
