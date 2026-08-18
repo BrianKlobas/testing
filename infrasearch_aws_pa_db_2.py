@@ -3,9 +3,9 @@
 Infrastructure Intelligence GUI (Multi-Tab Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
-  1. Search & Investigation (Precision ENI/EC2/RDS Security Group Correlation)
-  2. AWS Organization Topology Explorer
-  3. Data Collection Metrics & Analytics
+  1. Search & Investigation (Strict Direct ENI/EC2/RDS Security Group Correlation)
+  2. AWS Organization Topology Explorer (Expandable Tree)
+  3. Data Collection Metrics & Analytics (Accurate Account & Resource Totals)
 
 Run:
     python infra_intel.py --firewall-data ./parsed --aws-data ./aws_parsed --org-file org_topology.json --db infra_intel.db
@@ -160,7 +160,8 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path = DB_PATH):
                 continue
 
             candidates = data if isinstance(data, list) else [data]
-            dev_id = get_device_id(f"AWS: {account_name} ({region_or_global})")
+            # Device name corresponds to the Account folder identifier (e.g., 123456789012_My_Account)
+            dev_id = get_device_id(f"AWS: {account_name}")
 
             for item in candidates:
                 if not isinstance(item, dict):
@@ -195,23 +196,35 @@ class InfrastructureDataSource:
 
     def get_stats(self) -> dict[str, Any]:
         conn = get_db(self.db_file)
+        cursor = conn.cursor()
         
         # PAN-OS metrics
-        cursor = conn.cursor()
         cursor.execute("SELECT category, COUNT(*) as cnt FROM records WHERE platform='panos' GROUP BY category")
         panos_counts = {row["category"]: row["cnt"] for row in cursor.fetchall()}
         
-        # AWS metrics
-        cursor.execute("SELECT device_id, category, COUNT(*) as cnt FROM records WHERE platform='aws' GROUP BY device_id, category")
+        # AWS resource metrics across all accounts/regions
+        cursor.execute("SELECT category, COUNT(*) as cnt FROM records WHERE platform='aws' GROUP BY category")
         aws_records = cursor.fetchall()
-        
-        aws_summary = {}
-        for r in aws_records:
-            cat = r["category"]
-            aws_summary[cat] = aws_summary.get(cat, 0) + r["cnt"]
+        aws_summary = {row["category"]: row["cnt"] for row in aws_records}
 
-        cursor.execute("SELECT COUNT(DISTINCT device_id) FROM records WHERE platform='aws'")
-        aws_accounts_count = cursor.fetchone()[0]
+        # Count actual unique AWS accounts from topology file or device records
+        aws_accounts_count = 0
+        if ORG_FILE_PATH.exists():
+            try:
+                with ORG_FILE_PATH.open("r", encoding="utf-8") as f:
+                    org_data = json.load(f)
+                    def count_accounts(node):
+                        cnt = len(node.get("Accounts", []))
+                        for ou in node.get("OUs", []):
+                            cnt += count_accounts(ou)
+                        return cnt
+                    aws_accounts_count = count_accounts(org_data.get("Hierarchy", {}))
+            except Exception:
+                aws_accounts_count = 0
+
+        if aws_accounts_count == 0:
+            cursor.execute("SELECT COUNT(DISTINCT name) FROM devices WHERE name LIKE 'AWS:%'")
+            aws_accounts_count = cursor.fetchone()[0]
 
         conn.close()
         return {
@@ -311,7 +324,7 @@ class InfrastructureDataSource:
                     }
                     aws_matches.append(entry)
 
-                    # Extract directly attached Security Groups from ENIs, EC2 Instances, or RDS
+                    # STRICT ENI / EC2 / RDS direct attachment check only
                     if row["category"] == "enis":
                         for group in item.get("Groups", []):
                             if group.get("GroupId"):
@@ -327,7 +340,7 @@ class InfrastructureDataSource:
 
             output["aws_matches"] = aws_matches
 
-            # Fetch the actual attached Security Group details and rules
+            # Fetch ONLY the directly attached Security Groups
             attached_sgs = []
             if matched_sg_ids:
                 for dev_name, sg_id in matched_sg_ids:
@@ -609,10 +622,11 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 .empty { padding: 40px; background: var(--bg-card); border-radius: 10px; text-align: center; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
-/* Org Tree View */
-.ou-box { background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
-.ou-title { font-weight: 600; color: #1e293b; font-size: 14px; }
-.account-pill { display: inline-block; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 10px; margin: 4px; font-size: 12px; }
+/* Expandable Org Tree View */
+.org-tree details { margin: 6px 0; background: #ffffff; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; }
+.org-tree summary { font-weight: 600; color: #1e293b; font-size: 14px; outline: none; }
+.org-accounts { margin-top: 8px; padding-left: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+.account-badge { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #334155; }
 
 .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 .stat-card { background: white; border: 1px solid var(--border-color); border-radius: 10px; padding: 20px; }
@@ -649,7 +663,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 <b>Precision SG Correlation:</b> Querying an IP or resource will surface the exact resource along with its <b>directly attached Security Groups and Rules</b>.
+                💡 <b>Strict SG Correlation:</b> Querying an IP will strictly display Security Groups and rules directly bound to the ENI, EC2 instance, or RDS database.
             </div>
         </div>
 
@@ -663,10 +677,10 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
     <div id="tab-org" class="tab-content">
         <div class="section">
             <div class="section-title">
-                <h2>AWS Organization Hierarchy & Member Accounts</h2>
+                <h2>AWS Organization Expandable Hierarchy</h2>
                 <span id="orgMeta" class="count">Loading...</span>
             </div>
-            <div style="padding: 20px;" id="orgTreeView">
+            <div style="padding: 20px;" id="orgTreeView" class="org-tree">
                 <div class="empty">Loading organization topology...</div>
             </div>
         </div>
@@ -739,7 +753,7 @@ function itemHTML(x, badgeClass) {
 function render(data) {
     setSummary(data.summary);
     let html = "";
-    if (data.aws_matches.length) html += section("Matching AWS Resources", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
+    if (data.aws_matches.length) html += section("Matching AWS Resources (EC2, ENI, RDS, Route53, etc.)", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
     if (data.attached_security_groups.length) html += section("Directly Attached Security Groups & Rules", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
     if (data.matched_addresses.length) html += section("Firewall Address Objects", data.matched_addresses.length, data.matched_addresses.map(x => itemHTML(x, "green")).join(""));
     if (data.raw_matches.length) html += section("Raw Text Matches", data.raw_matches.length, data.raw_matches.map(x => itemHTML(x, "")).join(""));
@@ -780,32 +794,34 @@ async function loadOrgTopology() {
     }
     document.getElementById("orgMeta").textContent = `Org ID: ${org.OrganizationId} | Root: ${org.RootName}`;
 
-    function renderNode(node) {
-        let html = `<div class="ou-box"><div class="ou-title">📁 ${esc(node.Path || node.Name)}</div>`;
+    function renderNode(node, openDefault = true) {
+        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 ${esc(node.Path || node.Name)}</summary>`;
         if (node.Accounts && node.Accounts.length) {
-            html += `<div style="margin-top:8px;">`;
+            html += `<div class="org-accounts">`;
             for (const acc of node.Accounts) {
-                html += `<span class="account-pill">🖥️ <b>${esc(acc.Name)}</b> (${esc(acc.Id)}) <span style="color:#64748b;">[${esc(acc.Status)}]</span></span>`;
+                html += `<div class="account-badge">🖥️ <b>${esc(acc.Name)}</b> &bull; <code>${esc(acc.Id)}</code> <span style="color:#64748b;">[${esc(acc.Status)}]</span></div>`;
             }
             html += `</div>`;
         }
         if (node.OUs && node.OUs.length) {
+            html += `<div style="margin-top:6px; padding-left:10px;">`;
             for (const ou of node.OUs) {
-                html += renderNode(ou);
+                html += renderNode(ou, false);
             }
+            html += `</div>`;
         }
-        html += `</div>`;
+        html += `</details>`;
         return html;
     }
 
-    container.innerHTML = renderNode(org.Hierarchy);
+    container.innerHTML = renderNode(org.Hierarchy, true);
 }
 
 async function loadStats() {
     const res = await fetch("/api/stats");
     const st = await res.json();
     
-    let awsHtml = `<div class="stat-row"><b>Active Accounts Scanned</b><span>${st.aws_accounts_scanned}</span></div>`;
+    let awsHtml = `<div class="stat-row"><b>Active AWS Accounts Scanned</b><span><b>${st.aws_accounts_scanned}</b></span></div>`;
     for (const [k, v] of Object.entries(st.aws_resources)) {
         awsHtml += `<div class="stat-row"><span>${esc(k)}</span><b>${v}</b></div>`;
     }
