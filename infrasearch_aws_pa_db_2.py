@@ -3,7 +3,7 @@
 Infrastructure Intelligence GUI (Multi-Tab Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
-  1. Search & Investigation (Strict Direct ENI/EC2/RDS Security Group & Firewall Correlation)
+  1. Search & Investigation (Full Cascading Resource & Security Group Correlation)
   2. AWS Organization Topology Explorer (Expandable Tree with Account IDs & Names)
   3. PAN-OS Panorama Topology & Mapping
   4. Data Collection Metrics & Analytics
@@ -60,7 +60,7 @@ def init_db(db_file: Path = DB_PATH):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id INTEGER,
             platform TEXT,       -- 'panos' or 'aws'
-            category TEXT,       -- 'addresses', 'vpcs', 'ec2_instances', 'security_groups', etc.
+            category TEXT,       -- 'addresses', 'vpcs', 'ec2_instances', 'security_groups', 'enis', etc.
             filename TEXT,
             name TEXT,           
             data TEXT,           
@@ -275,10 +275,11 @@ class InfrastructureDataSource:
         conn = get_db(self.db_file)
         cursor = conn.cursor()
 
-        matched_sg_ids = set()
-        matched_aws_records = []
-        seen_aws_ids = set()
+        matched_aws_record_ids = set()
+        matched_sg_keys = set()
+        pending_aws_lookups = []
 
+        # 1. Initial Match Search (by Network overlap or Text/ID search)
         if query_network:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
@@ -308,9 +309,10 @@ class InfrastructureDataSource:
                                     hits.append({"path": p, "value": orig})
                 scan_dict(item)
 
-                if hits and row["name"] not in seen_aws_ids:
-                    seen_aws_ids.add(row["name"])
-                    matched_aws_records.append((row, hits))
+                if hits:
+                    if row["id"] not in matched_aws_record_ids:
+                        matched_aws_record_ids.add(row["id"])
+                        pending_aws_lookups.append((row, hits))
         else:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
@@ -319,13 +321,18 @@ class InfrastructureDataSource:
                 WHERE r.platform = 'aws' AND (r.name LIKE ? OR r.data LIKE ?)
             """, (f"%{query}%", f"%{query}%"))
             for row in cursor.fetchall():
-                item = json.loads(row["data"])
-                if row["name"] not in seen_aws_ids:
-                    seen_aws_ids.add(row["name"])
-                    matched_aws_records.append((row, []))
+                if row["id"] not in matched_aws_record_ids:
+                    matched_aws_record_ids.add(row["id"])
+                    pending_aws_lookups.append((row, []))
 
-        for row, hits in matched_aws_records:
+        # 2. Cascading Relationship Discovery (Instance ID -> ENIs -> Security Groups -> IPs)
+        # We process iteratively to catch secondary links (e.g., searching Instance ID -> finds Instance -> finds ENIs -> finds Security Groups)
+        processed_count = 0
+        while processed_count < len(pending_aws_lookups):
+            row, hits = pending_aws_lookups[processed_count]
+            processed_count += 1
             item = json.loads(row["data"])
+
             output["aws_matches"].append({
                 "device": row["device"],
                 "type": row["category"],
@@ -336,39 +343,55 @@ class InfrastructureDataSource:
             })
 
             cat = row["category"]
-            if cat == "enis":
-                for group in item.get("Groups", []):
-                    if group.get("GroupId"):
-                        matched_sg_ids.add((row["device"], group["GroupId"]))
-            elif cat == "ec2_instances":
-                for group in item.get("SecurityGroups", []):
-                    if group.get("GroupId"):
-                        matched_sg_ids.add((row["device"], group["GroupId"]))
+            dev_name = row["device"]
+
+            # If it's an EC2 Instance, harvest its ENIs, Security Groups, and Private/Public IPs
+            if cat == "ec2_instances":
                 inst_id = item.get("InstanceId")
+                # Cascade: Find ENIs attached to this instance
                 if inst_id:
                     cursor.execute("""
                         SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                         FROM records r JOIN devices d ON r.device_id = d.id
                         WHERE r.category = 'enis' AND r.data LIKE ? AND d.name = ?
-                    """, (f"%{inst_id}%", row["device"]))
+                    """, (f"%{inst_id}%", dev_name))
                     for eni_row in cursor.fetchall():
-                        eni_item = json.loads(eni_row["data"])
-                        if eni_row["name"] not in seen_aws_ids:
-                            seen_aws_ids.add(eni_row["name"])
-                            output["aws_matches"].append({
-                                "device": eni_row["device"], "type": eni_row["category"],
-                                "file": eni_row["filename"], "name": eni_row["name"],
-                                "data": eni_item, "matches": []
-                            })
-                        for group in eni_item.get("Groups", []):
-                            if group.get("GroupId"):
-                                matched_sg_ids.add((eni_row["device"], group["GroupId"]))
+                        if eni_row["id"] not in matched_aws_record_ids:
+                            matched_aws_record_ids.add(eni_row["id"])
+                            pending_aws_lookups.append((eni_row, []))
+
+                # Harvest SGs directly listed in EC2
+                for group in item.get("SecurityGroups", []):
+                    if group.get("GroupId"):
+                        matched_sg_keys.add((dev_name, group["GroupId"]))
+
+            elif cat == "enis":
+                # Harvest SGs attached to this ENI
+                for group in item.get("Groups", []):
+                    if group.get("GroupId"):
+                        matched_sg_keys.add((dev_name, group["GroupId"]))
+                
+                # Also cascade to find the EC2 instance attached to this ENI if any
+                attachment = item.get("Attachment", {})
+                att_inst_id = attachment.get("InstanceId")
+                if att_inst_id:
+                    cursor.execute("""
+                        SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
+                        FROM records r JOIN devices d ON r.device_id = d.id
+                        WHERE r.category = 'ec2_instances' AND r.name = ? AND d.name = ?
+                    """, (att_inst_id, dev_name))
+                    for inst_row in cursor.fetchall():
+                        if inst_row["id"] not in matched_aws_record_ids:
+                            matched_aws_record_ids.add(inst_row["id"])
+                            pending_aws_lookups.append((inst_row, []))
+
             elif cat == "rds_instances":
                 for group in item.get("VpcSecurityGroups", []):
                     if group.get("VpcSecurityGroupId"):
-                        matched_sg_ids.add((row["device"], group["VpcSecurityGroupId"]))
+                        matched_sg_keys.add((dev_name, group["VpcSecurityGroupId"]))
 
-        for dev_name, sg_id in matched_sg_ids:
+        # 3. Fetch All Associated Security Groups
+        for dev_name, sg_id in matched_sg_keys:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                 FROM records r
@@ -377,14 +400,19 @@ class InfrastructureDataSource:
             """, (sg_id, dev_name))
             sg_row = cursor.fetchone()
             if sg_row:
-                output["attached_security_groups"].append({
-                    "device": sg_row["device"],
-                    "type": sg_row["category"],
-                    "file": sg_row["filename"],
-                    "name": sg_row["name"],
-                    "data": json.loads(sg_row["data"])
-                })
+                # Avoid duplicates in attached security groups
+                sg_item = json.loads(sg_row["data"])
+                exists = any(s["name"] == sg_row["name"] and s["device"] == sg_row["device"] for s in output["attached_security_groups"])
+                if not exists:
+                    output["attached_security_groups"].append({
+                        "device": sg_row["device"],
+                        "type": sg_row["category"],
+                        "file": sg_row["filename"],
+                        "name": sg_row["name"],
+                        "data": sg_item
+                    })
 
+        # 4. Search PAN-OS Firewall Address Objects, Rules, & DNS objects
         pan_query = query_network.compressed if query_network else query
         cursor.execute("""
             SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
@@ -638,7 +666,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 <b>Cascade Lookup:</b> Searching an Instance ID automatically retrieves the instance details, linked ENIs, direct Security Groups, and related firewall/route objects.
+                💡 <b>Deep Cascade:</b> Searching an Instance ID now populates its Instance details card, all linked ENI cards, all attached Security Group cards with their rules, and matching firewall objects simultaneously!
             </div>
         </div>
 
@@ -798,7 +826,7 @@ function itemHTML(x, badgeClass) {
 function render(data) {
     setSummary(data.summary);
     let html = "";
-    if (data.aws_matches.length) html += section("Matching AWS Resources (EC2, ENI, RDS, etc.)", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
+    if (data.aws_matches.length) html += section("Matching AWS Resources (EC2, ENIs, RDS, etc.)", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
     if (data.attached_security_groups.length) html += section("Directly Attached Security Groups & Rules", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
     if (data.matched_addresses.length) html += section("Firewall Address Objects & Rules", data.matched_addresses.length, data.matched_addresses.map(x => itemHTML(x, "green")).join(""));
     if (data.raw_matches.length) html += section("Raw Text Matches", data.raw_matches.length, data.raw_matches.map(x => itemHTML(x, "")).join(""));
