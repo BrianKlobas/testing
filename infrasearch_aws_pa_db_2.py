@@ -325,8 +325,7 @@ class InfrastructureDataSource:
                     matched_aws_record_ids.add(row["id"])
                     pending_aws_lookups.append((row, []))
 
-        # 2. Cascading Relationship Discovery (Instance ID -> ENIs -> Security Groups -> IPs)
-        # We process iteratively to catch secondary links (e.g., searching Instance ID -> finds Instance -> finds ENIs -> finds Security Groups)
+        # 2. Cascading Relationship Discovery (Instance ID -> ENIs -> Security Groups)
         processed_count = 0
         while processed_count < len(pending_aws_lookups):
             row, hits = pending_aws_lookups[processed_count]
@@ -345,33 +344,31 @@ class InfrastructureDataSource:
             cat = row["category"]
             dev_name = row["device"]
 
-            # If it's an EC2 Instance, harvest its ENIs, Security Groups, and Private/Public IPs
+            # If it's an EC2 Instance, harvest its ENIs, Security Groups
             if cat == "ec2_instances":
                 inst_id = item.get("InstanceId")
-                # Cascade: Find ENIs attached to this instance
                 if inst_id:
                     cursor.execute("""
                         SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                         FROM records r JOIN devices d ON r.device_id = d.id
-                        WHERE r.category = 'enis' AND r.data LIKE ? AND d.name = ?
+                        WHERE r.category LIKE '%eni%' AND r.data LIKE ? AND d.name = ?
                     """, (f"%{inst_id}%", dev_name))
                     for eni_row in cursor.fetchall():
                         if eni_row["id"] not in matched_aws_record_ids:
                             matched_aws_record_ids.add(eni_row["id"])
                             pending_aws_lookups.append((eni_row, []))
 
-                # Harvest SGs directly listed in EC2
                 for group in item.get("SecurityGroups", []):
-                    if group.get("GroupId"):
-                        matched_sg_keys.add((dev_name, group["GroupId"]))
+                    sg_id = group.get("GroupId") or group.get("GroupName")
+                    if sg_id:
+                        matched_sg_keys.add((dev_name, sg_id))
 
-            elif cat == "enis":
-                # Harvest SGs attached to this ENI
+            elif "eni" in cat.lower():
                 for group in item.get("Groups", []):
-                    if group.get("GroupId"):
-                        matched_sg_keys.add((dev_name, group["GroupId"]))
+                    sg_id = group.get("GroupId") or group.get("GroupName")
+                    if sg_id:
+                        matched_sg_keys.add((dev_name, sg_id))
                 
-                # Also cascade to find the EC2 instance attached to this ENI if any
                 attachment = item.get("Attachment", {})
                 att_inst_id = attachment.get("InstanceId")
                 if att_inst_id:
@@ -387,20 +384,21 @@ class InfrastructureDataSource:
 
             elif cat == "rds_instances":
                 for group in item.get("VpcSecurityGroups", []):
-                    if group.get("VpcSecurityGroupId"):
-                        matched_sg_keys.add((dev_name, group["VpcSecurityGroupId"]))
+                    sg_id = group.get("VpcSecurityGroupId")
+                    if sg_id:
+                        matched_sg_keys.add((dev_name, sg_id))
 
-        # 3. Fetch All Associated Security Groups
+        # 3. Fetch All Associated Security Groups (Robust category & ID match)
         for dev_name, sg_id in matched_sg_keys:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
-                WHERE r.category = 'security_groups' AND r.name = ? AND d.name = ?
-            """, (sg_id, dev_name))
-            sg_row = cursor.fetchone()
-            if sg_row:
-                # Avoid duplicates in attached security groups
+                WHERE (r.category LIKE '%security_group%' OR r.category LIKE '%sg%')
+                  AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
+            """, (sg_id, f'%"{sg_id}"%', dev_name))
+            
+            for sg_row in cursor.fetchall():
                 sg_item = json.loads(sg_row["data"])
                 exists = any(s["name"] == sg_row["name"] and s["device"] == sg_row["device"] for s in output["attached_security_groups"])
                 if not exists:
@@ -666,7 +664,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 <b>Deep Cascade:</b> Searching an Instance ID now populates its Instance details card, all linked ENI cards, all attached Security Group cards with their rules, and matching firewall objects simultaneously!
+                💡 <b>Deep Cascade:</b> Searching an Instance ID automatically surfaces its EC2 details, attached ENIs with IPs, and bound Security Groups with inbound/outbound rules.
             </div>
         </div>
 
@@ -778,7 +776,7 @@ function renderProperties(obj) {
 function itemHTML(x, badgeClass) {
     let extraDetails = "";
     
-    if (x.type === 'security_groups' && x.data.IpPermissions) {
+    if (x.type && x.type.includes('security_group') && x.data.IpPermissions) {
         extraDetails += `<div class="sub-table-header">Inbound Rules (IpPermissions)</div>`;
         extraDetails += `<table class="prop-table"><tr><th>Protocol</th><th>From Port</th><th>To Port</th><th>Source / CIDR</th></tr>`;
         for (const perm of (x.data.IpPermissions || [])) {
@@ -793,7 +791,7 @@ function itemHTML(x, badgeClass) {
         extraDetails += `</table>`;
     }
 
-    if (x.type === 'enis' && x.data.PrivateIpAddresses) {
+    if (x.type && x.type.includes('eni') && x.data.PrivateIpAddresses) {
         extraDetails += `<div class="sub-table-header">Assigned IP Addresses</div>`;
         extraDetails += `<table class="prop-table"><tr><th>Private IP</th><th>Primary</th><th>Association (Public IP)</th></tr>`;
         for (const ipcfg of (x.data.PrivateIpAddresses || [])) {
