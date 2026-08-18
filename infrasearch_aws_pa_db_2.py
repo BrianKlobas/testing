@@ -287,13 +287,10 @@ class InfrastructureDataSource:
 
         matched_aws_record_ids = set()
         matched_sg_ids = set()
-        discovered_ips = set()
+        discovered_ip_networks = set()
+
         if query_network:
-            discovered_ips.add(query_network.compressed)
-        else:
-            potential_ip = self.parse_network(query)
-            if potential_ip:
-                discovered_ips.add(potential_ip.compressed)
+            discovered_ip_networks.add(query_network)
 
         pending_aws_lookups = []
 
@@ -343,7 +340,7 @@ class InfrastructureDataSource:
                     matched_aws_record_ids.add(row["id"])
                     pending_aws_lookups.append((row, []))
 
-        # 2. Cascading Relationship Discovery & IP Extraction
+        # 2. Cascading Relationship Discovery & Aggressive IP Extraction
         processed_count = 0
         while processed_count < len(pending_aws_lookups):
             row, hits = pending_aws_lookups[processed_count]
@@ -362,10 +359,11 @@ class InfrastructureDataSource:
             cat = row["category"]
             dev_name = row["device"]
 
-            # Dynamically extract IPs from discovered AWS records
+            # Dynamically extract ALL IP addresses/CIDRs found anywhere inside the AWS object payload
             for _, net in self.extract_networks_from_text(row["data"]):
-                discovered_ips.add(net.compressed)
+                discovered_ip_networks.add(net)
 
+            # Instance -> Find related ENIs and Security Groups
             if cat == "ec2_instances":
                 inst_id = item.get("InstanceId")
                 if inst_id:
@@ -384,6 +382,7 @@ class InfrastructureDataSource:
                     if sg_id:
                         matched_sg_ids.add((dev_name, sg_id))
 
+            # ENI -> Find related Instance and Security Groups
             elif "eni" in cat.lower():
                 for group in item.get("Groups", []):
                     sg_id = group.get("GroupId")
@@ -403,13 +402,14 @@ class InfrastructureDataSource:
                             matched_aws_record_ids.add(inst_row["id"])
                             pending_aws_lookups.append((inst_row, []))
 
+            # RDS -> Find related Security Groups
             elif cat == "rds_instances":
                 for group in item.get("VpcSecurityGroups", []):
                     sg_id = group.get("VpcSecurityGroupId")
                     if sg_id:
                         matched_sg_ids.add((dev_name, sg_id))
 
-        # 3. Fetch All Associated Security Groups strictly by GroupId and Account scope
+        # 3. Fetch All Associated Security Groups
         for dev_name, sg_id in matched_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
@@ -432,33 +432,51 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # 4. Search PAN-OS Firewall Objects & Rules using Query + Discovered IPs
-        pan_queries = set(discovered_ips)
-        if query:
-            pan_queries.add(query)
-
+        # 4. Correlate Discovered IPs to PAN-OS Objects and Rules
         matched_panos_ids = set()
-        for pan_q in pan_queries:
-            p_net = self.parse_network(pan_q)
-            p_term = p_net.compressed if p_net else pan_q
 
-            cursor.execute("""
-                SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
-                FROM records r
-                JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos' AND (r.name LIKE ? OR r.data LIKE ?)
-            """, (f"%{p_term}%", f"%{p_term}%"))
-            
-            for row in cursor.fetchall():
-                if row["id"] not in matched_panos_ids:
+        cursor.execute("""
+            SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+            FROM records r
+            JOIN devices d ON r.device_id = d.id
+            WHERE r.platform = 'panos'
+        """)
+        panos_records = cursor.fetchall()
+
+        for pan_net in discovered_ip_networks:
+            ip_str = str(pan_net.network_address)
+            cidr_str = pan_net.compressed
+
+            for row in panos_records:
+                if row["id"] in matched_panos_ids:
+                    continue
+
+                row_data_str = row["data"]
+                
+                # Direct string/text match check
+                if ip_str in row_data_str or cidr_str in row_data_str:
                     matched_panos_ids.add(row["id"])
                     output["matched_addresses"].append({
                         "device": row["device"],
                         "type": row["category"],
                         "file": row["filename"],
                         "name": row["name"],
-                        "data": json.loads(row["data"])
+                        "data": json.loads(row_data_str)
                     })
+                    continue
+
+                # Subnet CIDR overlap check for PAN-OS address objects
+                for _, pan_found_net in self.extract_networks_from_text(row_data_str):
+                    if pan_net.overlaps(pan_found_net):
+                        matched_panos_ids.add(row["id"])
+                        output["matched_addresses"].append({
+                            "device": row["device"],
+                            "type": row["category"],
+                            "file": row["filename"],
+                            "name": row["name"],
+                            "data": json.loads(row_data_str)
+                        })
+                        break
 
         output["summary"] = {
             "aws_resources": len(output["aws_matches"]),
