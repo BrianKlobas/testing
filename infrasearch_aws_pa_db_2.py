@@ -263,7 +263,7 @@ class InfrastructureDataSource:
             if net:
                 yield match, net
 
-    def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
+def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         query = query.strip()
         query_network = self.parse_network(query)
         
@@ -280,18 +280,18 @@ class InfrastructureDataSource:
         conn = get_db(self.db_file)
         cursor = conn.cursor()
 
+        matched_sg_ids = set()
+        matched_aws_records = []
+        seen_aws_ids = set()
+
         if query_network:
-            # 1. Scan AWS resources for IP/CIDR overlaps (ENIs, EC2, RDS, Subnets)
+            # IP/CIDR Search across all AWS records
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
                 WHERE r.platform = 'aws'
             """)
-            
-            aws_matches = []
-            matched_sg_ids = set()
-            
             for row in cursor.fetchall():
                 item = json.loads(row["data"])
                 hits = []
@@ -314,124 +314,105 @@ class InfrastructureDataSource:
                                     hits.append({"path": p, "value": orig})
                 scan_dict(item)
 
-                if hits:
-                    entry = {
-                        "device": row["device"],
-                        "type": row["category"],
-                        "file": row["filename"],
-                        "name": row["name"],
-                        "data": item,
-                        "matches": hits
-                    }
-                    aws_matches.append(entry)
-
-                    # STRICT ENI / EC2 / RDS direct attachment check only
-                    if row["category"] == "enis":
-                        for group in item.get("Groups", []):
-                            if group.get("GroupId"):
-                                matched_sg_ids.add((row["device"], group["GroupId"]))
-                    elif row["category"] == "ec2_instances":
-                        for group in item.get("SecurityGroups", []):
-                            if group.get("GroupId"):
-                                matched_sg_ids.add((row["device"], group["GroupId"]))
-                    elif row["category"] == "rds_instances":
-                        for group in item.get("VpcSecurityGroups", []):
-                            if group.get("VpcSecurityGroupId"):
-                                matched_sg_ids.add((row["device"], group["VpcSecurityGroupId"]))
-
-            output["aws_matches"] = aws_matches
-
-            # Fetch ONLY the directly attached Security Groups (excluding ignored ones)
-            attached_sgs = []
-            if matched_sg_ids:
-                for dev_name, sg_id in matched_sg_ids:
-                    # Skip if excluded by ID or Name
-                    if sg_id in EXCLUDED_SG_IDS:
-                        continue
-                        
-                    cursor.execute("""
-                        SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
-                        FROM records r
-                        JOIN devices d ON r.device_id = d.id
-                        WHERE r.category = 'security_groups' AND r.name = ? AND d.name = ?
-                    """, (sg_id, dev_name))
-                    sg_row = cursor.fetchone()
-                    if sg_row:
-                        sg_data = json.loads(sg_row["data"])
-                        sg_name = sg_data.get("GroupName", "")
-                        if sg_name in EXCLUDED_SG_NAMES:
-                            continue
-                            
-                        attached_sgs.append({
-                            "device": sg_row["device"],
-                            "type": sg_row["category"],
-                            "file": sg_row["filename"],
-                            "name": sg_row["name"],
-                            "data": sg_data
-                        })
-            output["attached_security_groups"] = attached_sgs
-
-            # Also check PAN-OS address objects
+                if hits and row["name"] not in seen_aws_ids:
+                    seen_aws_ids.add(row["name"])
+                    matched_aws_records.append((row, hits))
+        else:
+            # Text / ID Search (e.g. Instance ID i-xxxx, ENI id eni-xxxx, etc.)
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos' AND r.category = 'addresses'
-            """)
-            address_hits = []
+                WHERE r.platform = 'aws' AND (r.name LIKE ? OR r.data LIKE ?)
+            """, (f"%{query}%", f"%{query}%"))
             for row in cursor.fetchall():
                 item = json.loads(row["data"])
-                hits = []
-                def scan_panos(d, path=""):
-                    for k, v in d.items():
-                        p = f"{path}.{k}" if path else str(k)
-                        if isinstance(v, dict): scan_panos(v, p)
-                        elif isinstance(v, list):
-                            for idx, elem in enumerate(v):
-                                if isinstance(elem, dict): scan_panos(elem, f"{p}[{idx}]")
-                                else:
-                                    for orig, net in self.extract_networks_from_text(elem):
-                                        if query_network.overlaps(net): hits.append({"path": f"{p}[{idx}]", "value": orig})
-                        else:
-                            for orig, net in self.extract_networks_from_text(v):
-                                if query_network.overlaps(net): hits.append({"path": p, "value": orig})
-                scan_panos(item)
-                if hits:
-                    address_hits.append({
-                        "device": row["device"], "type": row["category"], "file": row["filename"],
-                        "name": row["name"], "data": item, "matches": hits
-                    })
-            output["matched_addresses"] = address_hits
+                if row["name"] not in seen_aws_ids:
+                    seen_aws_ids.add(row["name"])
+                    matched_aws_records.append((row, []))
 
-        else:
-            # Text Search using FTS5
+        # Process AWS matches and automatically harvest attached Security Groups
+        for row, hits in matched_aws_records:
+            item = json.loads(row["data"])
+            output["aws_matches"].append({
+                "device": row["device"],
+                "type": row["category"],
+                "file": row["filename"],
+                "name": row["name"],
+                "data": item,
+                "matches": hits
+            })
+
+            # Harvest attached security groups from ENIs, EC2 instances, or RDS databases
+            cat = row["category"]
+            if cat == "enis":
+                for group in item.get("Groups", []):
+                    if group.get("GroupId"):
+                        matched_sg_ids.add((row["device"], group["GroupId"]))
+            elif cat == "ec2_instances":
+                for group in item.get("SecurityGroups", []):
+                    if group.get("GroupId"):
+                        matched_sg_ids.add((row["device"], group["GroupId"]))
+                # If searching by Instance ID, also fetch its attached ENIs automatically!
+                inst_id = item.get("InstanceId")
+                if inst_id:
+                    cursor.execute("""
+                        SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
+                        FROM records r JOIN devices d ON r.device_id = d.id
+                        WHERE r.category = 'enis' AND r.data LIKE ? AND d.name = ?
+                    """, (f"%{inst_id}%", row["device"]))
+                    for eni_row in cursor.fetchall():
+                        eni_item = json.loads(eni_row["data"])
+                        if eni_row["name"] not in seen_aws_ids:
+                            seen_aws_ids.add(eni_row["name"])
+                            output["aws_matches"].append({
+                                "device": eni_row["device"], "type": eni_row["category"],
+                                "file": eni_row["filename"], "name": eni_row["name"],
+                                "data": eni_item, "matches": []
+                            })
+                        for group in eni_item.get("Groups", []):
+                            if group.get("GroupId"):
+                                matched_sg_ids.add((eni_row["device"], group["GroupId"]))
+            elif cat == "rds_instances":
+                for group in item.get("VpcSecurityGroups", []):
+                    if group.get("VpcSecurityGroupId"):
+                        matched_sg_ids.add((row["device"], group["VpcSecurityGroupId"]))
+
+        # Fetch Directly Attached Security Groups
+        for dev_name, sg_id in matched_sg_ids:
             cursor.execute("""
-                SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
-                FROM records_fts f
-                JOIN records r ON f.rowid = r.id
+                SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
+                FROM records r
                 JOIN devices d ON r.device_id = d.id
-                WHERE records_fts MATCH ? LIMIT ?
-            """, (query, limit))
+                WHERE r.category = 'security_groups' AND r.name = ? AND d.name = ?
+            """, (sg_id, dev_name))
+            sg_row = cursor.fetchone()
+            if sg_row:
+                output["attached_security_groups"].append({
+                    "device": sg_row["device"],
+                    "type": sg_row["category"],
+                    "file": sg_row["filename"],
+                    "name": sg_row["name"],
+                    "data": json.loads(sg_row["data"])
+                })
 
-            aws_matches = []
-            raw_matches = []
-            for row in cursor.fetchall():
-                item = json.loads(row["data"])
-                entry = {
-                    "device": row["device"],
-                    "platform": row["platform"],
-                    "type": row["category"],
-                    "file": row["filename"],
-                    "name": row["name"],
-                    "data": item
-                }
-                if row["platform"] == "aws":
-                    aws_matches.append(entry)
-                else:
-                    raw_matches.append(entry)
-
-            output["aws_matches"] = aws_matches
-            output["raw_matches"] = raw_matches
+        # Also search PAN-OS Firewall address objects and rules
+        pan_query = query_network.compressed if query_network else query
+        cursor.execute("""
+            SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+            FROM records r
+            JOIN devices d ON r.device_id = d.id
+            WHERE r.platform = 'panos' AND (r.name LIKE ? OR r.data LIKE ?)
+        """, (f"%{pan_query}%", f"%{pan_query}%"))
+        
+        for row in cursor.fetchall():
+            output["matched_addresses"].append({
+                "device": row["device"],
+                "type": row["category"],
+                "file": row["filename"],
+                "name": row["name"],
+                "data": json.loads(row["data"])
+            })
 
         output["summary"] = {
             "aws_resources": len(output["aws_matches"]),
@@ -741,7 +722,76 @@ function section(title, count, body) {
     return `<div class="section"><div class="section-title"><h2>${title}</h2><span class="count">${count}</span></div>${body}</div>`;
 }
 
+<style>
+/* Clean Property Table Styling */
+.prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: #ffffff; border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0; }
+.prop-table th { background: #f8fafc; color: #475569; text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #e2e8f0; width: 30%; }
+.prop-table td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; color: #1e293b; font-family: monospace; word-break: break-all; }
+.prop-table tr:last-child td { border-bottom: none; }
+.sub-table-header { font-weight: 600; font-size: 12px; color: #64748b; margin: 12px 0 4px 0; text-transform: uppercase; letter-spacing: 0.5px; }
+</style>
+
+<script>
+function renderProperties(obj) {
+    if (!obj || typeof obj !== 'object') return '';
+    let html = `<table class="prop-table">`;
+    
+    // Pick out primary highlight keys first if present
+    const priorityKeys = ['InstanceId', 'NetworkInterfaceId', 'GroupId', 'GroupName', 'VpcId', 'SubnetId', 'PrivateIpAddress', 'State', 'InstanceType', 'Platform', 'Description'];
+    const renderedKeys = new Set();
+
+    for (const k of priorityKeys) {
+        if (obj[k] !== undefined && obj[k] !== null && obj[k] !== "") {
+            let val = obj[k];
+            if (typeof val === 'object') val = JSON.stringify(val);
+            html += `<tr><th>${esc(k)}</th><td>${esc(val)}</td></tr>`;
+            renderedKeys.add(k);
+        }
+    }
+
+    for (const [k, v] of Object.entries(obj)) {
+        if (renderedKeys.has(k)) continue;
+        if (v !== null && v !== undefined && v !== "" && typeof v !== 'object') {
+            html += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
+        } else if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
+            // Render complex inner lists cleanly (like Security Groups, IPConfigs, Rules)
+            html += `<tr><th>${esc(k)}</th><td><div style="font-family:sans-serif; font-size:12px; color:#475569;"><em>Contains ${v.length} sub-item(s)</em></div></td></tr>`;
+        }
+    }
+    html += `</table>`;
+    return html;
+}
+
 function itemHTML(x, badgeClass) {
+    let extraDetails = "";
+    
+    // If it's a security group, render inbound/outbound rules cleanly
+    if (x.type === 'security_groups' && x.data.IpPermissions) {
+        extraDetails += `<div class="sub-table-header">Inbound Rules (IpPermissions)</div>`;
+        extraDetails += `<table class="prop-table"><tr><th>Protocol</th><th>From Port</th><th>To Port</th><th>Source / CIDR</th></tr>`;
+        for (const perm of (x.data.IpPermissions || [])) {
+            const proto = perm.IpProtocol === '-1' ? 'All' : (perm.IpProtocol || 'Any');
+            const fPort = perm.FromPort !== undefined ? perm.FromPort : 'Any';
+            const tPort = perm.ToPort !== undefined ? perm.ToPort : 'Any';
+            const sources = [];
+            for (const ipR of (perm.IpRanges || [])) sources.push(ipR.CidrIp);
+            for (const pvR of (perm.UserIdGroupPairs || [])) sources.push(pvR.GroupId || pvR.GroupName);
+            extraDetails += `<tr><td>${esc(proto)}</td><td>${esc(fPort)}</td><td>${esc(tPort)}</td><td><code>${esc(sources.join(', ') || 'Any')}</code></td></tr>`;
+        }
+        extraDetails += `</table>`;
+    }
+
+    // If it's an ENI, render Private IP configs cleanly
+    if (x.type === 'enis' && x.data.PrivateIpAddresses) {
+        extraDetails += `<div class="sub-table-header">Assigned IP Addresses</div>`;
+        extraDetails += `<table class="prop-table"><tr><th>Private IP</th><th>Primary</th><th>Association (Public IP)</th></tr>`;
+        for (const ipcfg of (x.data.PrivateIpAddresses || [])) {
+            const pubIp = ipcfg.Association ? ipcfg.Association.PublicIp : 'None';
+            extraDetails += `<tr><td><code>${esc(ipcfg.PrivateIpAddress)}</code></td><td>${esc(ipcfg.Primary)}</td><td><code>${esc(pubIp)}</code></td></tr>`;
+        }
+        extraDetails += `</table>`;
+    }
+
     return `
         <div class="item">
             <div class="item-head">
@@ -751,14 +801,17 @@ function itemHTML(x, badgeClass) {
                     <span class="badge ${badgeClass}">${esc(x.type)}</span>
                 </div>
             </div>
-            <div class="meta">${esc(x.file)}</div>
-            <details>
-                <summary>View Complete JSON Payload</summary>
+            <div class="meta">Source File: ${esc(x.file)}</div>
+            ${renderProperties(x.data)}
+            ${extraDetails}
+            <details style="margin-top: 12px;">
+                <summary>View Full Raw JSON Payload</summary>
                 <pre>${jsonStr(x.data)}</pre>
             </details>
         </div>
     `;
 }
+</script>
 
 function render(data) {
     setSummary(data.summary);
