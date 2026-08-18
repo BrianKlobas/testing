@@ -3,13 +3,14 @@
 Infrastructure Intelligence GUI (Multi-Tab Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
-  1. Search & Investigation (Strict Direct ENI/EC2/RDS Security Group Correlation)
-  2. AWS Organization Topology Explorer (Expandable Tree)
-  3. Data Collection Metrics & Analytics (Accurate Account & Resource Totals)
+  1. Search & Investigation (Strict Direct ENI/EC2/RDS Security Group & Firewall Correlation)
+  2. AWS Organization Topology Explorer (Expandable Tree with Account IDs & Names)
+  3. PAN-OS Panorama Topology & Mapping
+  4. Data Collection Metrics & Analytics
 
 Run:
-    python infra_intel.py --firewall-data ./parsed --aws-data ./aws_parsed --org-file org_topology.json --db infra_intel.db
-Then:
+    python infra_intel.py --firewall-data ./parsed --aws-data ./aws_parsed --org-file org_topology.json --pan-file panorama_topology.json --db infra_intel.db
+Then open:
     http://localhost:8080
 """
 
@@ -31,7 +32,7 @@ DB_PATH = Path("infra_intel.db")
 FW_DATA_ROOT = Path("parsed").resolve()
 AWS_DATA_ROOT = Path("aws_parsed").resolve()
 ORG_FILE_PATH = Path("org_topology.json").resolve()
-EXCLUDED_SG_NAMES = {"default", "name2"}
+PAN_TOPOLOGY_PATH = Path("panorama_topology.json").resolve()
 
 # ----------------------------------------------------------------------
 # Database Initialization & Indexing Engine
@@ -151,7 +152,6 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path = DB_PATH):
                 continue
             
             account_name = rel.parts[0]
-            region_or_global = rel.parts[1]
             service_type = path.stem
 
             try:
@@ -161,7 +161,6 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path = DB_PATH):
                 continue
 
             candidates = data if isinstance(data, list) else [data]
-            # Device name corresponds to the Account folder identifier (e.g., 123456789012_My_Account)
             dev_id = get_device_id(f"AWS: {account_name}")
 
             for item in candidates:
@@ -199,16 +198,12 @@ class InfrastructureDataSource:
         conn = get_db(self.db_file)
         cursor = conn.cursor()
         
-        # PAN-OS metrics
         cursor.execute("SELECT category, COUNT(*) as cnt FROM records WHERE platform='panos' GROUP BY category")
         panos_counts = {row["category"]: row["cnt"] for row in cursor.fetchall()}
         
-        # AWS resource metrics across all accounts/regions
         cursor.execute("SELECT category, COUNT(*) as cnt FROM records WHERE platform='aws' GROUP BY category")
-        aws_records = cursor.fetchall()
-        aws_summary = {row["category"]: row["cnt"] for row in aws_records}
+        aws_summary = {row["category"]: row["cnt"] for row in cursor.fetchall()}
 
-        # Count actual unique AWS accounts from topology file or device records
         aws_accounts_count = 0
         if ORG_FILE_PATH.exists():
             try:
@@ -263,7 +258,7 @@ class InfrastructureDataSource:
             if net:
                 yield match, net
 
-def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
+    def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         query = query.strip()
         query_network = self.parse_network(query)
         
@@ -285,7 +280,6 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         seen_aws_ids = set()
 
         if query_network:
-            # IP/CIDR Search across all AWS records
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
                 FROM records r
@@ -318,7 +312,6 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                     seen_aws_ids.add(row["name"])
                     matched_aws_records.append((row, hits))
         else:
-            # Text / ID Search (e.g. Instance ID i-xxxx, ENI id eni-xxxx, etc.)
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
                 FROM records r
@@ -331,7 +324,6 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                     seen_aws_ids.add(row["name"])
                     matched_aws_records.append((row, []))
 
-        # Process AWS matches and automatically harvest attached Security Groups
         for row, hits in matched_aws_records:
             item = json.loads(row["data"])
             output["aws_matches"].append({
@@ -343,7 +335,6 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                 "matches": hits
             })
 
-            # Harvest attached security groups from ENIs, EC2 instances, or RDS databases
             cat = row["category"]
             if cat == "enis":
                 for group in item.get("Groups", []):
@@ -353,7 +344,6 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                 for group in item.get("SecurityGroups", []):
                     if group.get("GroupId"):
                         matched_sg_ids.add((row["device"], group["GroupId"]))
-                # If searching by Instance ID, also fetch its attached ENIs automatically!
                 inst_id = item.get("InstanceId")
                 if inst_id:
                     cursor.execute("""
@@ -378,7 +368,6 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                     if group.get("VpcSecurityGroupId"):
                         matched_sg_ids.add((row["device"], group["VpcSecurityGroupId"]))
 
-        # Fetch Directly Attached Security Groups
         for dev_name, sg_id in matched_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
@@ -396,7 +385,6 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                     "data": json.loads(sg_row["data"])
                 })
 
-        # Also search PAN-OS Firewall address objects and rules
         pan_query = query_network.compressed if query_network else query
         cursor.execute("""
             SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
@@ -449,7 +437,6 @@ HTML = r"""
     --text-secondary: #64748b;
     --accent: #3b82f6;
     --accent-hover: #2563eb;
-    --aws-orange: #ff9900;
 }
 
 * { box-sizing: border-box; }
@@ -471,32 +458,20 @@ body {
     box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
 }
 
-.brand {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-}
-
+.brand { display: flex; gap: 12px; align-items: center; }
 .logo {
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    background: var(--accent);
-    display: grid;
-    place-items: center;
-    font-weight: bold;
-    font-size: 15px;
+    width: 36px; height: 36px; border-radius: 8px; background: var(--accent);
+    display: grid; place-items: center; font-weight: bold; font-size: 15px;
 }
-
 .brand h1 { margin: 0; font-size: 17px; font-weight: 600; }
 .brand small { color: #94a3b8; font-size: 11px; }
 
-/* Tabs Navigation */
 .tabs-bar {
     background: #1e293b;
     padding: 0 28px;
     display: flex;
     gap: 6px;
+    overflow-x: auto;
 }
 
 .tab-btn {
@@ -509,6 +484,7 @@ body {
     cursor: pointer;
     border-bottom: 3px solid transparent;
     transition: all 0.2s;
+    white-space: nowrap;
 }
 
 .tab-btn:hover { color: #f8fafc; }
@@ -526,7 +502,7 @@ body {
     border: 1px solid var(--border-color);
 }
 
-.search-row { display: flex; gap: 10px; }
+.search-row { display: flex; gap: 10px; flex-wrap: wrap; }
 .search-row input { flex: 1; min-width: 320px; }
 
 input, button {
@@ -546,7 +522,7 @@ button.secondary { background: #64748b; }
 
 .summary {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 14px;
     margin: 18px 0;
 }
@@ -613,16 +589,23 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 .empty { padding: 40px; background: var(--bg-card); border-radius: 10px; text-align: center; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
-/* Expandable Org Tree View */
+/* Tree & Properties Views */
 .org-tree details { margin: 6px 0; background: #ffffff; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; }
 .org-tree summary { font-weight: 600; color: #1e293b; font-size: 14px; outline: none; }
 .org-accounts { margin-top: 8px; padding-left: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
 .account-badge { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #334155; }
 
-.stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 16px; }
 .stat-card { background: white; border: 1px solid var(--border-color); border-radius: 10px; padding: 20px; }
 .stat-card h3 { margin-top: 0; font-size: 16px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px; }
 .stat-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px dashed #f8fafc; }
+
+/* Clean Property Tables */
+.prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: #ffffff; border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0; }
+.prop-table th { background: #f8fafc; color: #475569; text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #e2e8f0; width: 30%; }
+.prop-table td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; color: #1e293b; font-family: monospace; word-break: break-all; }
+.prop-table tr:last-child td { border-bottom: none; }
+.sub-table-header { font-weight: 600; font-size: 12px; color: #64748b; margin: 12px 0 4px 0; text-transform: uppercase; letter-spacing: 0.5px; }
 </style>
 </head>
 
@@ -641,6 +624,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 <div class="tabs-bar">
     <button class="tab-btn active" onclick="switchTab('search', this)">🔍 Search & Investigation</button>
     <button class="tab-btn" onclick="switchTab('org', this)">🏢 AWS Organization Topology</button>
+    <button class="tab-btn" onclick="switchTab('pan', this)">🔥 PAN-OS Panorama Topology</button>
     <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
 </div>
 
@@ -649,12 +633,12 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
     <div id="tab-search" class="tab-content active">
         <div class="search-panel">
             <div class="search-row">
-                <input id="query" placeholder="Search IP, CIDR, VPC ID, Subnet, EC2 ID, Security Group..." autocomplete="off">
+                <input id="query" placeholder="Search IP, CIDR, Instance ID (i-xxxx), ENI ID, Security Group..." autocomplete="off">
                 <button onclick="investigate()">Investigate</button>
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 <b>Strict SG Correlation:</b> Querying an IP will strictly display Security Groups and rules directly bound to the ENI, EC2 instance, or RDS database.
+                💡 <b>Cascade Lookup:</b> Searching an Instance ID automatically retrieves the instance details, linked ENIs, direct Security Groups, and related firewall/route objects.
             </div>
         </div>
 
@@ -664,7 +648,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
-    <!-- TAB 2: ORG TOPOLOGY -->
+    <!-- TAB 2: AWS ORG TOPOLOGY -->
     <div id="tab-org" class="tab-content">
         <div class="section">
             <div class="section-title">
@@ -677,7 +661,20 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
-    <!-- TAB 3: ANALYTICS -->
+    <!-- TAB 3: PANORAMA TOPOLOGY -->
+    <div id="tab-pan" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>Panorama Templates & Device Groups Hierarchy</h2>
+                <span id="panMeta" class="count">Loading...</span>
+            </div>
+            <div style="padding: 20px;" id="panTreeView" class="org-tree">
+                <div class="empty">Loading Panorama topology...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 4: ANALYTICS -->
     <div id="tab-stats" class="tab-content">
         <div class="stats-grid">
             <div class="stat-card">
@@ -699,6 +696,7 @@ function switchTab(tabId, btn) {
     document.getElementById('tab-' + tabId).classList.add('active');
     btn.classList.add('active');
     if (tabId === 'org') loadOrgTopology();
+    if (tabId === 'pan') loadPanTopology();
     if (tabId === 'stats') loadStats();
 }
 
@@ -722,21 +720,9 @@ function section(title, count, body) {
     return `<div class="section"><div class="section-title"><h2>${title}</h2><span class="count">${count}</span></div>${body}</div>`;
 }
 
-<style>
-/* Clean Property Table Styling */
-.prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: #ffffff; border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0; }
-.prop-table th { background: #f8fafc; color: #475569; text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #e2e8f0; width: 30%; }
-.prop-table td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; color: #1e293b; font-family: monospace; word-break: break-all; }
-.prop-table tr:last-child td { border-bottom: none; }
-.sub-table-header { font-weight: 600; font-size: 12px; color: #64748b; margin: 12px 0 4px 0; text-transform: uppercase; letter-spacing: 0.5px; }
-</style>
-
-<script>
 function renderProperties(obj) {
     if (!obj || typeof obj !== 'object') return '';
     let html = `<table class="prop-table">`;
-    
-    // Pick out primary highlight keys first if present
     const priorityKeys = ['InstanceId', 'NetworkInterfaceId', 'GroupId', 'GroupName', 'VpcId', 'SubnetId', 'PrivateIpAddress', 'State', 'InstanceType', 'Platform', 'Description'];
     const renderedKeys = new Set();
 
@@ -754,7 +740,6 @@ function renderProperties(obj) {
         if (v !== null && v !== undefined && v !== "" && typeof v !== 'object') {
             html += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
         } else if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
-            // Render complex inner lists cleanly (like Security Groups, IPConfigs, Rules)
             html += `<tr><th>${esc(k)}</th><td><div style="font-family:sans-serif; font-size:12px; color:#475569;"><em>Contains ${v.length} sub-item(s)</em></div></td></tr>`;
         }
     }
@@ -765,7 +750,6 @@ function renderProperties(obj) {
 function itemHTML(x, badgeClass) {
     let extraDetails = "";
     
-    // If it's a security group, render inbound/outbound rules cleanly
     if (x.type === 'security_groups' && x.data.IpPermissions) {
         extraDetails += `<div class="sub-table-header">Inbound Rules (IpPermissions)</div>`;
         extraDetails += `<table class="prop-table"><tr><th>Protocol</th><th>From Port</th><th>To Port</th><th>Source / CIDR</th></tr>`;
@@ -781,7 +765,6 @@ function itemHTML(x, badgeClass) {
         extraDetails += `</table>`;
     }
 
-    // If it's an ENI, render Private IP configs cleanly
     if (x.type === 'enis' && x.data.PrivateIpAddresses) {
         extraDetails += `<div class="sub-table-header">Assigned IP Addresses</div>`;
         extraDetails += `<table class="prop-table"><tr><th>Private IP</th><th>Primary</th><th>Association (Public IP)</th></tr>`;
@@ -811,14 +794,13 @@ function itemHTML(x, badgeClass) {
         </div>
     `;
 }
-</script>
 
 function render(data) {
     setSummary(data.summary);
     let html = "";
-    if (data.aws_matches.length) html += section("Matching AWS Resources (EC2, ENI, RDS, Route53, etc.)", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
+    if (data.aws_matches.length) html += section("Matching AWS Resources (EC2, ENI, RDS, etc.)", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
     if (data.attached_security_groups.length) html += section("Directly Attached Security Groups & Rules", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
-    if (data.matched_addresses.length) html += section("Firewall Address Objects", data.matched_addresses.length, data.matched_addresses.map(x => itemHTML(x, "green")).join(""));
+    if (data.matched_addresses.length) html += section("Firewall Address Objects & Rules", data.matched_addresses.length, data.matched_addresses.map(x => itemHTML(x, "green")).join(""));
     if (data.raw_matches.length) html += section("Raw Text Matches", data.raw_matches.length, data.raw_matches.map(x => itemHTML(x, "")).join(""));
     if (!html) html = `<div class="empty">No matching records found.</div>`;
     document.getElementById("output").innerHTML = html;
@@ -861,7 +843,6 @@ async function loadOrgTopology() {
         const nodeName = node.Name || node.Path || "Root OU";
         let html = `<details ${openDefault ? 'open' : ''}><summary>📁 <b>${esc(nodeName)}</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${node.Accounts ? node.Accounts.length : 0} accounts)</span></summary>`;
         
-        // Render accounts directly belonging to this OU/Node
         if (node.Accounts && node.Accounts.length > 0) {
             html += `<div class="org-accounts">`;
             for (const acc of node.Accounts) {
@@ -875,7 +856,6 @@ async function loadOrgTopology() {
             html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No direct accounts in this level.</div>`;
         }
 
-        // Recursively render Sub-OUs
         const subOus = node.OUs || node.Children || node.OrganizationalUnits || [];
         if (subOus.length > 0) {
             html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
@@ -891,6 +871,60 @@ async function loadOrgTopology() {
 
     const hierarchyRoot = org.Hierarchy || org;
     container.innerHTML = renderNode(hierarchyRoot, true);
+}
+
+async function loadPanTopology() {
+    const container = document.getElementById("panTreeView");
+    const res = await fetch("/api/pan-topology");
+    const data = await res.json();
+    if (data.error) {
+        container.innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+        return;
+    }
+    document.getElementById("panMeta").textContent = `Panorama: ${data.PanoramaName || 'Panorama'}`;
+
+    let html = "";
+    html += `<details open><summary>📁 <b>Templates & Template Stacks</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${data.Templates ? data.Templates.length : 0} templates)</span></summary>`;
+    if (data.Templates && data.Templates.length > 0) {
+        html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
+        for (const tpl of data.Templates) {
+            html += `<details open><summary>🛠️ <b>${esc(tpl.Name)}</b> <span class="badge blue">${esc(tpl.Type)}</span> <span style="font-size:11px; color:#64748b;">— ${esc(tpl.Description || '')}</span></summary>`;
+            if (tpl.Firewalls && tpl.Firewalls.length > 0) {
+                html += `<div class="org-accounts">`;
+                for (const fw of tpl.Firewalls) {
+                    html += `<div class="account-badge">🔥 <b>${esc(fw.Hostname)}</b> &bull; Model: <code>${esc(fw.Model)}</code> &bull; SN: <code>${esc(fw.Serial)}</code></div>`;
+                }
+                html += `</div>`;
+            } else {
+                html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No firewalls bound directly to this template.</div>`;
+            }
+            html += `</details>`;
+        }
+        html += `</div>`;
+    }
+    html += `</details>`;
+
+    html += `<details open style="margin-top: 16px;"><summary>📁 <b>Device Groups (Policy Hierarchies)</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${data.DeviceGroups ? data.DeviceGroups.length : 0} device groups)</span></summary>`;
+    if (data.DeviceGroups && data.DeviceGroups.length > 0) {
+        html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
+        for (const dg of data.DeviceGroups) {
+            html += `<details open><summary>🛡️ <b>${esc(dg.Name)}</b> <span class="badge" style="background:#faf5ff; color:#7e22ce;">Parent: ${esc(dg.Parent || 'shared')}</span> <span style="font-size:11px; color:#64748b;">— ${esc(dg.Description || '')}</span></summary>`;
+            if (dg.Firewalls && dg.Firewalls.length > 0) {
+                html += `<div class="org-accounts">`;
+                for (const fw of dg.Firewalls) {
+                    html += `<div class="account-badge">🔥 <b>${esc(fw.Hostname)}</b> &bull; Model: <code>${esc(fw.Model)}</code> &bull; SN: <code>${esc(fw.Serial)}</code></div>`;
+                }
+                html += `</div>`;
+            } else {
+                html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No firewalls assigned to this device group.</div>`;
+            }
+            html += `</details>`;
+        }
+        html += `</div>`;
+    }
+    html += `</details>`;
+
+    container.innerHTML = html;
 }
 
 async function loadStats() {
@@ -935,9 +969,19 @@ def api_stats():
 @app.route("/api/org")
 def api_org():
     if not ORG_FILE_PATH.exists():
-        return jsonify({"error": f"Organization topology file '{ORG_FILE_PATH.name}' not found. Run discovery script first."}), 404
+        return jsonify({"error": f"Organization topology file '{ORG_FILE_PATH.name}' not found."}), 404
     try:
         with ORG_FILE_PATH.open("r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/pan-topology")
+def api_pan_topology():
+    if not PAN_TOPOLOGY_PATH.exists():
+        return jsonify({"error": f"Panorama topology file '{PAN_TOPOLOGY_PATH.name}' not found."}), 404
+    try:
+        with PAN_TOPOLOGY_PATH.open("r", encoding="utf-8") as f:
             return jsonify(json.load(f))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -963,6 +1007,7 @@ if __name__ == "__main__":
     parser.add_argument("--firewall-data", default="./parsed", help="Path to parsed Firewall JSON folder")
     parser.add_argument("--aws-data", default="./aws_parsed", help="Path to parsed AWS JSON folder")
     parser.add_argument("--org-file", default="org_topology.json", help="Path to AWS Org topology JSON file")
+    parser.add_argument("--pan-file", default="panorama_topology.json", help="Path to Panorama topology JSON file")
     parser.add_argument("--db", default="infra_intel.db", help="Path to SQLite database file")
     parser.add_argument("--port", type=int, default=8080, help="Web server port")
     args = parser.parse_args()
@@ -970,6 +1015,7 @@ if __name__ == "__main__":
     FW_DATA_ROOT = Path(args.firewall_data).resolve()
     AWS_DATA_ROOT = Path(args.aws_data).resolve()
     ORG_FILE_PATH = Path(args.org_file).resolve()
+    PAN_TOPOLOGY_PATH = Path(args.pan_file).resolve()
     DB_PATH = Path(args.db).resolve()
 
     print(f"[*] Ingesting data into SQLite database...")
