@@ -35,11 +35,34 @@ ORG_FILE_PATH = Path("org_topology.json").resolve()
 PAN_TOPOLOGY_PATH = Path("panorama_topology.json").resolve()
 
 # ----------------------------------------------------------------------
-# SQLite Helper & Custom Network CIDR Engine
+# Helper Functions for SG Extraction and IP Matching
 # ----------------------------------------------------------------------
 
+def extract_sg_ids(data: Any) -> set[str]:
+    """Recursively extracts all Security Group IDs from any nested dictionary/list structure."""
+    sg_ids = set()
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k in ("GroupId", "VpcSecurityGroupId") and isinstance(v, str) and v.startswith("sg-"):
+                sg_ids.add(v)
+            elif k in ("SecurityGroups", "Groups", "VpcSecurityGroups") and isinstance(v, list):
+                for item in v:
+                    if isinstance(item, str) and item.startswith("sg-"):
+                        sg_ids.add(item)
+                    elif isinstance(item, dict):
+                        gid = item.get("GroupId") or item.get("VpcSecurityGroupId")
+                        if gid and isinstance(gid, str) and gid.startswith("sg-"):
+                            sg_ids.add(gid)
+            else:
+                sg_ids.update(extract_sg_ids(v))
+    elif isinstance(data, list):
+        for item in data:
+            sg_ids.update(extract_sg_ids(item))
+    return sg_ids
+
+
 def sqlite_ip_contains(ip_str: str, cidr_or_ip_str: str) -> int:
-    """Custom SQLite function to check if a target IP falls inside a CIDR block or matches an IP range/string."""
+    """Checks if a target IP falls inside a CIDR block, IP range, or string definition."""
     if not ip_str or not cidr_or_ip_str:
         return 0
     try:
@@ -49,7 +72,7 @@ def sqlite_ip_contains(ip_str: str, cidr_or_ip_str: str) -> int:
 
     val = str(cidr_or_ip_str).strip()
     
-    # Range check (e.g., 10.0.0.1-10.0.0.250)
+    # Handle Range: 10.0.0.1-10.0.0.250
     if "-" in val and "/" not in val:
         parts = val.split("-")
         if len(parts) == 2:
@@ -60,21 +83,22 @@ def sqlite_ip_contains(ip_str: str, cidr_or_ip_str: str) -> int:
             except ValueError:
                 pass
 
-    # Subnet or Single IP Check (e.g., 10.0.0.0/24 or 10.0.0.1)
+    # Handle CIDR / Single IP: 10.0.0.0/24 or 10.0.0.1
     try:
         net = ipaddress.ip_network(val, strict=False)
         return 1 if target_ip in net else 0
     except ValueError:
         return 0
 
+
 def get_db(db_file: Path | None = None):
     if db_file is None:
         db_file = DB_PATH
     conn = sqlite3.connect(db_file)
     conn.row_factory = sqlite3.Row
-    # Register Python IP subnet matching directly inside SQLite
     conn.create_function("IP_CONTAINS", 2, sqlite_ip_contains)
     return conn
+
 
 def init_db(db_file: Path | None = None):
     if db_file is None:
@@ -112,6 +136,7 @@ def init_db(db_file: Path | None = None):
     """)
     conn.commit()
     conn.close()
+
 
 def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
     if db_file is None:
@@ -208,7 +233,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
 
 
 # ----------------------------------------------------------------------
-# Advanced Cascading Search Engine
+# Search Engine
 # ----------------------------------------------------------------------
 
 class InfrastructureDataSource:
@@ -294,10 +319,10 @@ class InfrastructureDataSource:
         cursor = conn.cursor()
 
         matched_aws_record_ids = set()
-        matched_sg_ids = set()  # Explicit tuples of (device_name, sg_id) attached to matched resources
+        matched_sg_ids = set()  # Set of (device_name, sg_id)
         pending_aws_lookups = []
 
-        # 1. AWS Resource Lookup
+        # 1. Primary AWS Lookup
         if query_network:
             target_ip = str(query_network.network_address)
             target_cidr = query_network.compressed
@@ -332,7 +357,7 @@ class InfrastructureDataSource:
                         matched_aws_record_ids.add(row["id"])
                         pending_aws_lookups.append((row, []))
 
-        # 2. Extract Exact Attached Security Groups from AWS Resources
+        # 2. Extract Security Groups using Recursive AST Inspection
         processed_count = 0
         while processed_count < len(pending_aws_lookups):
             row, hits = pending_aws_lookups[processed_count]
@@ -348,17 +373,13 @@ class InfrastructureDataSource:
                 "matches": hits
             })
 
-            cat = row["category"]
             dev_name = row["device"]
+            found_sgs = extract_sg_ids(item)
+            for sg in found_sgs:
+                matched_sg_ids.add((dev_name, sg))
 
-            if cat == "ec2_instances":
-                # Extract strict SGs bound directly to the EC2 instance
-                for group in item.get("SecurityGroups", []):
-                    sg_id = group.get("GroupId")
-                    if sg_id:
-                        matched_sg_ids.add((dev_name, sg_id))
-
-                # Also surface linked ENIs
+            # Cascade: EC2 Instance -> Network Interfaces
+            if row["category"] == "ec2_instances":
                 inst_id = item.get("InstanceId")
                 if inst_id:
                     cursor.execute("""
@@ -371,28 +392,15 @@ class InfrastructureDataSource:
                             matched_aws_record_ids.add(eni_row["id"])
                             pending_aws_lookups.append((eni_row, []))
 
-            elif "eni" in cat.lower():
-                # Extract strict SGs bound to the ENI
-                for group in item.get("Groups", []):
-                    sg_id = group.get("GroupId")
-                    if sg_id:
-                        matched_sg_ids.add((dev_name, sg_id))
-
-            elif cat == "rds_instances":
-                for group in item.get("VpcSecurityGroups", []):
-                    sg_id = group.get("VpcSecurityGroupId")
-                    if sg_id:
-                        matched_sg_ids.add((dev_name, sg_id))
-
-        # 3. Precise Security Group Records Fetch (Exclusively for attached SGs)
+        # 3. Pull Full Record Payloads for Discovered Security Groups
         for dev_name, sg_id in matched_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
                 WHERE (r.category LIKE '%security_group%' OR r.category LIKE '%sg%')
-                  AND r.name = ? AND d.name = ?
-            """, (sg_id, dev_name))
+                  AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
+            """, (sg_id, f'%"GroupId": "{sg_id}"%', dev_name))
             
             for sg_row in cursor.fetchall():
                 sg_item = json.loads(sg_row["data"])
@@ -407,45 +415,46 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # 4. Comprehensive Palo Alto Object & Subnet/Group Correlation Engine
+        # 4. Palo Alto Correlation Engine (Addresses, Address Groups & Security Rules)
         matched_panos_ids = set()
         matched_object_names = set()
+
+        cursor.execute("""
+            SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+            FROM records r
+            JOIN devices d ON r.device_id = d.id
+            WHERE r.platform = 'panos'
+        """)
+        
+        all_panos_records = cursor.fetchall()
 
         if query_network:
             target_ip_str = str(query_network.network_address)
 
-            # Step A: Find Palo Address Objects where the search IP falls inside their IP/CIDR/Range definition
-            cursor.execute("""
-                SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
-                FROM records r
-                JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos'
-            """)
-
-            for row in cursor.fetchall():
-                if row["id"] in matched_panos_ids:
-                    continue
-
+            # Phase A: Match direct IP / CIDR / Subnets inside Address objects
+            for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
 
-                # Direct string/name match
-                if query.lower() in row["name"].lower():
-                    is_match = True
+                # Convert data to string for broad text checking if needed
+                data_str = json.dumps(item_data)
 
-                # Check Palo Alto specific IP fields against target IP
+                # Check explicit PAN-OS object structures
                 ip_netmask = item_data.get("ip-netmask") or item_data.get("ip_netmask") or item_data.get("ip")
                 ip_range = item_data.get("ip-range") or item_data.get("ip_range")
                 
                 if ip_netmask and sqlite_ip_contains(target_ip_str, ip_netmask):
                     is_match = True
-                if ip_range and sqlite_ip_contains(target_ip_str, ip_range):
+                elif ip_range and sqlite_ip_contains(target_ip_str, ip_range):
+                    is_match = True
+                elif target_ip_str in data_str:
                     is_match = True
 
                 if is_match:
                     matched_panos_ids.add(row["id"])
-                    if row["name"]:
-                        matched_object_names.add(row["name"])
+                    obj_name = row["name"] or item_data.get("name")
+                    if obj_name:
+                        matched_object_names.add(str(obj_name))
                     output["matched_addresses"].append({
                         "device": row["device"],
                         "type": row["category"],
@@ -454,31 +463,29 @@ class InfrastructureDataSource:
                         "data": item_data
                     })
 
-            # Step B: Cascading lookup — Find Address Groups or Security Rules that reference the matched Object Names or IP
+            # Phase B: Cascading correlation for Address Groups and Rules referencing matched object names
             if matched_object_names:
-                for obj_name in list(matched_object_names):
-                    cursor.execute("""
-                        SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
-                        FROM records r
-                        JOIN devices d ON r.device_id = d.id
-                        WHERE r.platform = 'panos' AND r.data LIKE ?
-                    """, (f"%{obj_name}%",))
-
-                    for row in cursor.fetchall():
-                        if row["id"] not in matched_panos_ids:
+                for row in all_panos_records:
+                    if row["id"] in matched_panos_ids:
+                        continue
+                    item_data = json.loads(row["data"])
+                    data_str = json.dumps(item_data)
+                    
+                    for name in list(matched_object_names):
+                        if f'"{name}"' in data_str or name in item_data.get("static", []) or name in item_data.get("members", []):
                             matched_panos_ids.add(row["id"])
-                            if row["name"]:
-                                matched_object_names.add(row["name"])
+                            obj_name = row["name"] or item_data.get("name")
+                            if obj_name:
+                                matched_object_names.add(str(obj_name))
                             output["matched_addresses"].append({
                                 "device": row["device"],
                                 "type": row["category"],
                                 "file": row["filename"],
                                 "name": row["name"],
-                                "data": json.loads(row["data"])
+                                "data": item_data
                             })
-
+                            break
         else:
-            # Text FTS Lookup
             clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
             if clean_q:
                 fts_query = f'"{clean_q}"*'
@@ -524,7 +531,7 @@ HTML = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Infrastructure Intelligence — Unified Dark Dashboard</title>
+<title>Infrastructure Intelligence — Dashboard</title>
 <style>
 :root {
     --bg-main: #090d16;
@@ -737,7 +744,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 <b>Subnet CIDR Matching Active:</b> Searching an IP (e.g. <code>10.0.0.1</code>) automatically matches Palo Alto CIDR subnets (e.g. <code>10.0.0.0/24</code>) and cascading Address Groups.
+                💡 Recursive security group extraction and Palo Alto subnet math enabled.
             </div>
         </div>
 
@@ -808,7 +815,7 @@ function setSummary(s) {
             <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
             <div class="card palo-card"><b>${s.firewall_objects}</b><span>Palo Alto Objects / Rules</span></div>
-            <div class="card"><b>SQLite</b><span>Engine: CIDR Math Enabled</span></div>
+            <div class="card"><b>SQLite</b><span>Engine: Recursive AST Search</span></div>
         </div>
     `;
 }
@@ -852,7 +859,7 @@ function renderPaloAltoDetails(x) {
         if (d["ip-netmask"]) html += `<tr><th>IP / Subnet</th><td><code>${esc(d["ip-netmask"])}</code></td></tr>`;
         if (d["ip-range"]) html += `<tr><th>IP Range</th><td><code>${esc(d["ip-range"])}</code></td></tr>`;
         if (d.fqdn) html += `<tr><th>FQDN</th><td><code>${esc(d.fqdn)}</code></td></tr>`;
-        if (d.members) html += `<tr><th>Group Members</th><td>${renderPillList(d.members)}</td></tr>`;
+        if (d.members || d.static) html += `<tr><th>Group Members</th><td>${renderPillList(d.members || d.static)}</td></tr>`;
         if (d.description) html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
         html += `</table>`;
         return html;
