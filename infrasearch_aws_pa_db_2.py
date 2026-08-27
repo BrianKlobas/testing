@@ -63,8 +63,8 @@ def init_db(db_file: Path | None = None):
         CREATE TABLE IF NOT EXISTS records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id INTEGER,
-            platform TEXT,       -- 'panos' or 'aws'
-            category TEXT,       -- 'addresses', 'vpcs', 'ec2_instances', 'security_groups', 'enis', etc.
+            platform TEXT,
+            category TEXT,
             filename TEXT,
             name TEXT,           
             data TEXT,           
@@ -100,7 +100,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
         device_cache[dev_name] = row["id"]
         return row["id"]
 
-    # 1. Ingest PAN-OS Data
+    # Ingest PAN-OS Data
     if fw_root.exists():
         rule_types = {
             "security_rules", "nat_rules", "pbf_rules", "qos_rules",
@@ -148,7 +148,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
                     (dev_id, "panos", file_type, path.name, name, json.dumps(item))
                 )
 
-    # 2. Ingest AWS Data
+    # Ingest AWS Data
     if aws_root.exists():
         for path in sorted(aws_root.rglob("*.json")):
             if not path.is_file():
@@ -193,7 +193,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
 
 
 # ----------------------------------------------------------------------
-# Precision Search & Analytics Engine
+# Fast Search Engine
 # ----------------------------------------------------------------------
 
 class InfrastructureDataSource:
@@ -261,13 +261,6 @@ class InfrastructureDataSource:
         except ValueError:
             return None
 
-    def extract_networks_from_text(self, text):
-        pattern = r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?(?![\w.])"
-        for match in re.findall(pattern, str(text)):
-            net = self.parse_network(match)
-            if net:
-                yield match, net
-
     def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         query = query.strip()
         query_network = self.parse_network(query)
@@ -294,53 +287,42 @@ class InfrastructureDataSource:
 
         pending_aws_lookups = []
 
-        # 1. Initial Match Search (by Network overlap or Text/ID search)
+        # High-Speed Database Query Execution via SQL Pattern & FTS5
         if query_network:
+            target_ip = str(query_network.network_address)
+            target_cidr = query_network.compressed
+            
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'aws'
-            """)
-            for row in cursor.fetchall():
-                item = json.loads(row["data"])
-                hits = []
-                def scan_dict(d, path=""):
-                    for k, v in d.items():
-                        p = f"{path}.{k}" if path else str(k)
-                        if isinstance(v, dict):
-                            scan_dict(v, p)
-                        elif isinstance(v, list):
-                            for idx, elem in enumerate(v):
-                                if isinstance(elem, dict):
-                                    scan_dict(elem, f"{p}[{idx}]")
-                                else:
-                                    for orig, net in self.extract_networks_from_text(elem):
-                                        if query_network.overlaps(net):
-                                            hits.append({"path": f"{p}[{idx}]", "value": orig})
-                        else:
-                            for orig, net in self.extract_networks_from_text(v):
-                                if query_network.overlaps(net):
-                                    hits.append({"path": p, "value": orig})
-                scan_dict(item)
-
-                if hits:
-                    if row["id"] not in matched_aws_record_ids:
-                        matched_aws_record_ids.add(row["id"])
-                        pending_aws_lookups.append((row, hits))
-        else:
-            cursor.execute("""
-                SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
-                FROM records r
-                JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'aws' AND (r.name LIKE ? OR r.data LIKE ?)
-            """, (f"%{query}%", f"%{query}%"))
+                WHERE r.platform = 'aws' AND (r.data LIKE ? OR r.data LIKE ?)
+                LIMIT ?
+            """, (f"%{target_ip}%", f"%{target_cidr}%", limit))
+            
             for row in cursor.fetchall():
                 if row["id"] not in matched_aws_record_ids:
                     matched_aws_record_ids.add(row["id"])
                     pending_aws_lookups.append((row, []))
+        else:
+            clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
+            if clean_q:
+                fts_query = f'"{clean_q}"*'
+                cursor.execute("""
+                    SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+                    FROM records r
+                    JOIN devices d ON r.device_id = d.id
+                    JOIN records_fts fts ON fts.rowid = r.id
+                    WHERE r.platform = 'aws' AND records_fts MATCH ?
+                    LIMIT ?
+                """, (fts_query, limit))
+                
+                for row in cursor.fetchall():
+                    if row["id"] not in matched_aws_record_ids:
+                        matched_aws_record_ids.add(row["id"])
+                        pending_aws_lookups.append((row, []))
 
-        # 2. Cascading Relationship Discovery & Aggressive IP Extraction
+        # Fast Cascading Relationship Lookups
         processed_count = 0
         while processed_count < len(pending_aws_lookups):
             row, hits = pending_aws_lookups[processed_count]
@@ -359,11 +341,6 @@ class InfrastructureDataSource:
             cat = row["category"]
             dev_name = row["device"]
 
-            # Dynamically extract ALL IP addresses/CIDRs found anywhere inside the AWS object payload
-            for _, net in self.extract_networks_from_text(row["data"]):
-                discovered_ip_networks.add(net)
-
-            # Instance -> Find related ENIs and Security Groups
             if cat == "ec2_instances":
                 inst_id = item.get("InstanceId")
                 if inst_id:
@@ -382,7 +359,6 @@ class InfrastructureDataSource:
                     if sg_id:
                         matched_sg_ids.add((dev_name, sg_id))
 
-            # ENI -> Find related Instance and Security Groups
             elif "eni" in cat.lower():
                 for group in item.get("Groups", []):
                     sg_id = group.get("GroupId")
@@ -402,22 +378,21 @@ class InfrastructureDataSource:
                             matched_aws_record_ids.add(inst_row["id"])
                             pending_aws_lookups.append((inst_row, []))
 
-            # RDS -> Find related Security Groups
             elif cat == "rds_instances":
                 for group in item.get("VpcSecurityGroups", []):
                     sg_id = group.get("VpcSecurityGroupId")
                     if sg_id:
                         matched_sg_ids.add((dev_name, sg_id))
 
-        # 3. Fetch All Associated Security Groups
+        # Fetch Security Groups
         for dev_name, sg_id in matched_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
                 WHERE (r.category LIKE '%security_group%' OR r.category LIKE '%sg%')
-                  AND (r.name = ? OR json_extract(r.data, '$.GroupId') = ?) AND d.name = ?
-            """, (sg_id, sg_id, dev_name))
+                  AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
+            """, (sg_id, f"%{sg_id}%", dev_name))
             
             for sg_row in cursor.fetchall():
                 sg_item = json.loads(sg_row["data"])
@@ -432,56 +407,20 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # 4. Correlate Discovered IPs to PAN-OS Objects and Rules
+        # Fetch PAN-OS Records
         matched_panos_ids = set()
-
-        cursor.execute("""
-            SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
-            FROM records r
-            JOIN devices d ON r.device_id = d.id
-            WHERE r.platform = 'panos'
-        """)
-        panos_records = cursor.fetchall()
-
         if query_network:
-            for pan_net in discovered_ip_networks:
-                ip_str = str(pan_net.network_address)
-                cidr_str = pan_net.compressed
-
-                for row in panos_records:
-                    if row["id"] in matched_panos_ids:
-                        continue
-
-                    row_data_str = row["data"]
-                    
-                    if ip_str in row_data_str or cidr_str in row_data_str:
-                        matched_panos_ids.add(row["id"])
-                        output["matched_addresses"].append({
-                            "device": row["device"],
-                            "type": row["category"],
-                            "file": row["filename"],
-                            "name": row["name"],
-                            "data": json.loads(row_data_str)
-                        })
-                        continue
-
-                    for _, pan_found_net in self.extract_networks_from_text(row_data_str):
-                        if pan_net.overlaps(pan_found_net):
-                            matched_panos_ids.add(row["id"])
-                            output["matched_addresses"].append({
-                                "device": row["device"],
-                                "type": row["category"],
-                                "file": row["filename"],
-                                "name": row["name"],
-                                "data": json.loads(row_data_str)
-                            })
-                            break
-        else:
-            q_lower = query.lower()
-            for row in panos_records:
-                if row["id"] in matched_panos_ids:
-                    continue
-                if q_lower in row["name"].lower() or q_lower in row["data"].lower():
+            ip_str = str(query_network.network_address)
+            cidr_str = query_network.compressed
+            cursor.execute("""
+                SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+                FROM records r
+                JOIN devices d ON r.device_id = d.id
+                WHERE r.platform = 'panos' AND (r.data LIKE ? OR r.data LIKE ?)
+                LIMIT ?
+            """, (f"%{ip_str}%", f"%{cidr_str}%", limit))
+            for row in cursor.fetchall():
+                if row["id"] not in matched_panos_ids:
                     matched_panos_ids.add(row["id"])
                     output["matched_addresses"].append({
                         "device": row["device"],
@@ -490,6 +429,28 @@ class InfrastructureDataSource:
                         "name": row["name"],
                         "data": json.loads(row["data"])
                     })
+        else:
+            clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
+            if clean_q:
+                fts_query = f'"{clean_q}"*'
+                cursor.execute("""
+                    SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+                    FROM records r
+                    JOIN devices d ON r.device_id = d.id
+                    JOIN records_fts fts ON fts.rowid = r.id
+                    WHERE r.platform = 'panos' AND records_fts MATCH ?
+                    LIMIT ?
+                """, (fts_query, limit))
+                for row in cursor.fetchall():
+                    if row["id"] not in matched_panos_ids:
+                        matched_panos_ids.add(row["id"])
+                        output["matched_addresses"].append({
+                            "device": row["device"],
+                            "type": row["category"],
+                            "file": row["filename"],
+                            "name": row["name"],
+                            "data": json.loads(row["data"])
+                        })
 
         output["summary"] = {
             "aws_resources": len(output["aws_matches"]),
@@ -506,7 +467,7 @@ PANOS = InfrastructureDataSource()
 
 
 # ----------------------------------------------------------------------
-# Modern Multi-Tab HTML / CSS Template (Dark Mode & Fixed UI Engine)
+# Modern Multi-Tab HTML / CSS Template
 # ----------------------------------------------------------------------
 
 HTML = r"""
@@ -736,11 +697,11 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
     <div id="tab-org" class="tab-content">
         <div class="section">
             <div class="section-title">
-                <h2>AWS Organization Expandable Hierarchy</h2>
-                <span id="orgMeta" class="count">Loading...</span>
+                <h2>AWS Organization Hierarchy</h2>
+                <span id="orgMeta" class="count">Ready</span>
             </div>
             <div style="padding: 20px;" id="orgTreeView" class="org-tree">
-                <div class="empty">Loading organization topology...</div>
+                <div class="empty">Click tab to load topology...</div>
             </div>
         </div>
     </div>
@@ -749,10 +710,10 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         <div class="section">
             <div class="section-title">
                 <h2>Panorama Templates & Device Groups Hierarchy</h2>
-                <span id="panMeta" class="count">Loading...</span>
+                <span id="panMeta" class="count">Ready</span>
             </div>
             <div style="padding: 20px;" id="panTreeView" class="org-tree">
-                <div class="empty">Loading Panorama topology...</div>
+                <div class="empty">Click tab to load topology...</div>
             </div>
         </div>
     </div>
@@ -777,9 +738,6 @@ function switchTab(tabId, btn) {
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
     document.getElementById('tab-' + tabId).classList.add('active');
     btn.classList.add('active');
-    if (tabId === 'org') loadOrgTopology();
-    if (tabId === 'pan') loadPanTopology();
-    if (tabId === 'stats') loadStats();
 }
 
 function esc(value) {
@@ -793,7 +751,7 @@ function setSummary(s) {
             <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
             <div class="card palo-card"><b>${s.firewall_objects}</b><span>Palo Alto Objects / Rules</span></div>
-            <div class="card"><b>SQLite</b><span>Engine: FTS5</span></div>
+            <div class="card"><b>SQLite</b><span>Engine: FTS5 Indexed</span></div>
         </div>
     `;
 }
@@ -895,7 +853,7 @@ function render(data) {
 async function investigate() {
     const q = document.getElementById("query").value.trim();
     if (!q) return;
-    document.getElementById("output").innerHTML = `<div class="empty">Searching database for <b>${esc(q)}</b>...</div>`;
+    document.getElementById("output").innerHTML = `<div class="empty">Searching indexed database for <b>${esc(q)}</b>...</div>`;
     try {
         const res = await fetch("/api/investigate?q=" + encodeURIComponent(q));
         const data = await res.json();
@@ -942,26 +900,6 @@ def api_info():
 @app.route("/api/stats")
 def api_stats():
     return jsonify(PANOS.get_stats())
-
-@app.route("/api/org")
-def api_org():
-    if not ORG_FILE_PATH.exists():
-        return jsonify({"error": f"Organization topology file '{ORG_FILE_PATH.name}' not found."}), 404
-    try:
-        with ORG_FILE_PATH.open("r", encoding="utf-8") as f:
-            return jsonify(json.load(f))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/pan-topology")
-def api_pan_topology():
-    if not PAN_TOPOLOGY_PATH.exists():
-        return jsonify({"error": f"Panorama topology file '{PAN_TOPOLOGY_PATH.name}' not found."}), 404
-    try:
-        with PAN_TOPOLOGY_PATH.open("r", encoding="utf-8") as f:
-            return jsonify(json.load(f))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/investigate")
 def api_investigate():
