@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Infrastructure Intelligence GUI (Multi-Tab Unified Dashboard)
+Infrastructure Intelligence GUI (Left-Sidebar Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
-  1. Search & Investigation (Strict Cascading Resource & Security Group Correlation)
+  1. Search & Investigation
   2. AWS Organization Topology Explorer
   3. PAN-OS Panorama Topology & Mapping
-  4. Data Collection Metrics & Analytics
+  4. Automation Results & Collection Status
+  5. Information & Useful Links
+  6. Data Collection Metrics & Analytics
 
 Run:
     python infra_intel.py --firewall-data ./parsed --aws-data ./aws_parsed --org-file org_topology.json --pan-file panorama_topology.json --db infra_intel.db
@@ -19,8 +21,10 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import os
 import sqlite3
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +56,6 @@ def extract_ip_or_cidr(val: str) -> ipaddress.IPv4Network | ipaddress.IPv6Networ
 
 
 def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
-    """Checks if a target IP or Subnet overlaps with a firewall definition."""
     if not target_str or not cidr_or_range_str:
         return 0
     
@@ -62,7 +65,6 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
 
     val = str(cidr_or_range_str).strip()
     
-    # Range check: 10.0.0.1-10.0.0.50
     if "-" in val and "/" not in val:
         parts = val.split("-")
         if len(parts) == 2:
@@ -73,7 +75,6 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
             except ValueError:
                 pass
 
-    # Subnet / CIDR Overlap Check
     fw_net = extract_ip_or_cidr(val)
     if fw_net:
         return 1 if target_net.overlaps(fw_net) else 0
@@ -82,10 +83,7 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
 
 
 def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
-    """Strictly extracts SGs directly attached to an ENI or EC2 Instance JSON block."""
     sg_ids = set()
-    
-    # Direct ENI / Instance "Groups" or "SecurityGroups" array
     groups = item.get("Groups") or item.get("SecurityGroups") or item.get("groups")
     if isinstance(groups, list):
         for g in groups:
@@ -96,7 +94,6 @@ def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
                 if gid:
                     sg_ids.add(gid)
 
-    # Checked nested NetworkInterfaces inside EC2 payloads
     nis = item.get("NetworkInterfaces")
     if isinstance(nis, list):
         for ni in nis:
@@ -112,6 +109,27 @@ def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
                                 sg_ids.add(gid)
                                 
     return sg_ids
+
+
+def get_file_modified_time(filepath: Path) -> str:
+    if filepath.exists():
+        mtime = os.path.getmtime(filepath)
+        return datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+    return "N/A"
+
+
+def get_latest_dir_mtime(dirpath: Path) -> str:
+    if not dirpath.exists():
+        return "N/A"
+    latest = 0.0
+    for p in dirpath.rglob("*.json"):
+        if p.is_file():
+            mtime = os.path.getmtime(p)
+            if mtime > latest:
+                latest = mtime
+    if latest > 0:
+        return datetime.fromtimestamp(latest).strftime('%Y-%m-%d %H:%M:%S')
+    return "N/A"
 
 
 def get_db(db_file: Path | None = None):
@@ -277,23 +295,8 @@ class InfrastructureDataSource:
         cursor.execute("SELECT category, COUNT(*) as cnt FROM records WHERE platform='aws' GROUP BY category")
         aws_summary = {row["category"]: row["cnt"] for row in cursor.fetchall()}
 
-        aws_accounts_count = 0
-        if ORG_FILE_PATH.exists():
-            try:
-                with ORG_FILE_PATH.open("r", encoding="utf-8") as f:
-                    org_data = json.load(f)
-                    def count_accounts(node):
-                        cnt = len(node.get("Accounts", []) or node.get("AccountList", []))
-                        for ou in (node.get("OUs", []) or node.get("Children", []) or node.get("OrganizationalUnits", []) or node.get("SubOUs", [])):
-                            cnt += count_accounts(ou)
-                        return cnt
-                    aws_accounts_count = count_accounts(org_data.get("Hierarchy", {}) or org_data)
-            except Exception:
-                aws_accounts_count = 0
-
-        if aws_accounts_count == 0:
-            cursor.execute("SELECT COUNT(DISTINCT name) FROM devices WHERE name LIKE 'AWS:%'")
-            aws_accounts_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT name) FROM devices WHERE name LIKE 'AWS:%'")
+        aws_accounts_count = cursor.fetchone()[0]
 
         conn.close()
         return {
@@ -322,10 +325,10 @@ class InfrastructureDataSource:
         output = {
             "query": query,
             "query_type": "ip_or_cidr" if query_network else "text",
-            "matched_addresses": [],
+            "matched_objects": [],
+            "matched_rules": [],
             "aws_matches": [],
             "attached_security_groups": [],
-            "raw_matches": [],
             "summary": {}
         }
 
@@ -333,7 +336,7 @@ class InfrastructureDataSource:
         cursor = conn.cursor()
 
         matched_aws_record_ids = set()
-        attached_sg_ids = set()  # Set of (device_name, sg_id)
+        attached_sg_ids = set()
         related_cidrs_to_match = set()
 
         if query_network:
@@ -389,12 +392,10 @@ class InfrastructureDataSource:
 
             dev_name = row["device"]
             
-            # Extract STRICT attached Security Groups
             direct_sgs = extract_direct_attached_sg_ids(item)
             for sg_id in direct_sgs:
                 attached_sg_ids.add((dev_name, sg_id))
 
-            # Resolve Subnet / VPC CIDRs for Palo Correlation
             subnet_id = item.get("SubnetId")
             vpc_id = item.get("VpcId")
 
@@ -423,7 +424,7 @@ class InfrastructureDataSource:
                         if isinstance(block, dict) and block.get("CidrBlock"):
                             related_cidrs_to_match.add(block["CidrBlock"])
 
-        # 3. Resolve Payload for ONLY Attached SGs
+        # 3. Resolve Payload for Attached SGs
         for dev_name, sg_id in attached_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
@@ -446,7 +447,7 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # 4. PAN-OS Correlation Engine (Host IP, Subnet CIDR, and VPC CIDR Matcher)
+        # 4. PAN-OS Engine (Splitting Objects vs Rules)
         matched_panos_ids = set()
         matched_object_names = set()
 
@@ -459,18 +460,29 @@ class InfrastructureDataSource:
         
         all_panos_records = cursor.fetchall()
 
+        def classify_and_append_panos(row_dict, item_payload):
+            cat = str(row_dict["category"]).lower()
+            rec = {
+                "device": row_dict["device"],
+                "type": row_dict["category"],
+                "file": row_dict["filename"],
+                "name": row_dict["name"],
+                "data": item_payload
+            }
+            if "rule" in cat or "policy" in cat or "nat" in cat:
+                output["matched_rules"].append(rec)
+            else:
+                output["matched_objects"].append(rec)
+
         if related_cidrs_to_match:
-            # Phase A: Find Palo Address Objects that match Target IP or Subnet/VPC CIDRs
             for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
                 
                 ip_netmask = item_data.get("ip-netmask") or item_data.get("ip_netmask") or item_data.get("ip")
                 ip_range = item_data.get("ip-range") or item_data.get("ip_range")
-                
                 check_targets = [ip_netmask, ip_range]
                 
-                # Check for overlap against all collected CIDRs (Host, Subnet, VPC)
                 for cidr in related_cidrs_to_match:
                     for target in check_targets:
                         if target and sqlite_ip_contains(cidr, target):
@@ -484,15 +496,8 @@ class InfrastructureDataSource:
                     obj_name = row["name"] or item_data.get("name")
                     if obj_name:
                         matched_object_names.add(str(obj_name))
-                    output["matched_addresses"].append({
-                        "device": row["device"],
-                        "type": row["category"],
-                        "file": row["filename"],
-                        "name": row["name"],
-                        "data": item_data
-                    })
+                    classify_and_append_panos(row, item_data)
 
-            # Phase B: Cascading correlation for Address Groups and Security Rules referencing matched names
             if matched_object_names:
                 for row in all_panos_records:
                     if row["id"] in matched_panos_ids:
@@ -506,13 +511,7 @@ class InfrastructureDataSource:
                             obj_name = row["name"] or item_data.get("name")
                             if obj_name:
                                 matched_object_names.add(str(obj_name))
-                            output["matched_addresses"].append({
-                                "device": row["device"],
-                                "type": row["category"],
-                                "file": row["filename"],
-                                "name": row["name"],
-                                "data": item_data
-                            })
+                            classify_and_append_panos(row, item_data)
                             break
         else:
             clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
@@ -529,19 +528,13 @@ class InfrastructureDataSource:
                 for row in cursor.fetchall():
                     if row["id"] not in matched_panos_ids:
                         matched_panos_ids.add(row["id"])
-                        output["matched_addresses"].append({
-                            "device": row["device"],
-                            "type": row["category"],
-                            "file": row["filename"],
-                            "name": row["name"],
-                            "data": json.loads(row["data"])
-                        })
+                        classify_and_append_panos(row, json.loads(row["data"]))
 
         output["summary"] = {
             "aws_resources": len(output["aws_matches"]),
             "attached_sgs": len(output["attached_security_groups"]),
-            "firewall_objects": len(output["matched_addresses"]),
-            "raw": len(output["raw_matches"])
+            "palo_objects": len(output["matched_objects"]),
+            "palo_rules": len(output["matched_rules"])
         }
 
         conn.close()
@@ -573,6 +566,7 @@ HTML = r"""
     --accent-hover: #2563eb;
     --palo-orange: #ff6b00;
     --code-bg: #090d16;
+    --sidebar-width: 260px;
 }
 
 * { box-sizing: border-box; }
@@ -582,52 +576,78 @@ body {
     background: var(--bg-main);
     color: var(--text-primary);
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    min-height: 100vh;
 }
 
-.topbar {
+/* Sidebar Layout */
+.sidebar {
+    width: var(--sidebar-width);
     background: var(--bg-surface);
-    color: white;
-    padding: 14px 28px;
+    border-right: 1px solid var(--border-color);
     display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    z-index: 100;
+}
+
+.brand {
+    padding: 20px;
+    display: flex;
+    gap: 12px;
     align-items: center;
-    justify-content: space-between;
     border-bottom: 1px solid var(--border-color);
 }
-
-.brand { display: flex; gap: 12px; align-items: center; }
 .logo {
     width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #1d4ed8);
     display: grid; place-items: center; font-weight: bold; font-size: 15px; color: white;
 }
-.brand h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: 0.5px; }
+.brand h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.5px; }
 .brand small { color: var(--text-secondary); font-size: 11px; }
 
-.tabs-bar {
-    background: #0c1322;
-    padding: 0 28px;
+.nav-menu {
     display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    border-bottom: 1px solid var(--border-color);
+    flex-direction: column;
+    gap: 4px;
+    padding: 16px 12px;
+    flex: 1;
 }
 
 .tab-btn {
     background: transparent;
     color: var(--text-secondary);
     border: none;
-    padding: 12px 20px;
-    font-size: 14px;
+    padding: 12px 14px;
+    font-size: 13.5px;
     font-weight: 600;
     cursor: pointer;
-    border-bottom: 3px solid transparent;
+    border-radius: 8px;
+    text-align: left;
     transition: all 0.2s;
-    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
-.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.02); }
-.tab-btn.active { color: #ffffff; border-bottom-color: var(--accent); background: var(--bg-surface); }
+.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+.tab-btn.active { color: #ffffff; background: var(--accent); }
 
-.container { max-width: 1600px; margin: 24px auto; padding: 0 24px; }
+.sidebar-footer {
+    padding: 16px;
+    border-top: 1px solid var(--border-color);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* Main Content Wrapper */
+.main-wrapper {
+    margin-left: var(--sidebar-width);
+    flex: 1;
+    padding: 28px;
+    max-width: 1400px;
+}
+
 .tab-content { display: none; }
 .tab-content.active { display: block; }
 
@@ -674,7 +694,38 @@ button.secondary { background: #334155; color: var(--text-primary); }
 }
 .card b { display: block; font-size: 24px; color: var(--accent); font-weight: 700; }
 .card.palo-card b { color: var(--palo-orange); }
-.card span { color: var(--text-secondary); font-size: 12px; margin-top: 4px; display: block; text-transform: uppercase; }
+.card span { color: var(--text-secondary); font-size: 11px; margin-top: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.status-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 18px;
+}
+
+.status-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.status-title { font-weight: 700; font-size: 15px; }
+.status-pill {
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+.status-pill.success { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #059669; }
 
 .section {
     background: var(--bg-surface);
@@ -736,6 +787,31 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 .rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; }
 .rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; }
 
+.link-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-top: 14px;
+}
+.link-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+.link-card h4 { margin: 0 0 8px 0; color: var(--text-primary); }
+.link-card p { margin: 0 0 14px 0; font-size: 13px; color: var(--text-secondary); }
+.link-card a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+}
+.link-card a:hover { text-decoration: underline; }
+
 .org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
 .tree-node { margin-left: 20px; padding: 4px 0; }
 .tree-folder { color: #60a5fa; font-weight: bold; cursor: pointer; }
@@ -746,25 +822,35 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 </head>
 
 <body>
-<div class="topbar">
+
+<!-- Left Sidebar Navigation -->
+<div class="sidebar">
     <div class="brand">
         <div class="logo">II</div>
         <div>
-            <h1>Infrastructure Intelligence</h1>
-            <small>Unified Security & Topology Dashboard</small>
+            <h1>Infra Intel</h1>
+            <small>Unified Security Dashboard</small>
         </div>
     </div>
-    <div id="dataInfo" style="font-size:12px;color:var(--text-secondary);"></div>
+    
+    <div class="nav-menu">
+        <button class="tab-btn active" onclick="switchTab('search', this)">🔍 Search & Investigate</button>
+        <button class="tab-btn" onclick="switchTab('org', this)">🏢 AWS Org Topology</button>
+        <button class="tab-btn" onclick="switchTab('pan', this)">🔥 PAN Panorama Topology</button>
+        <button class="tab-btn" onclick="switchTab('automation', this)">⚙️ Automation Results</button>
+        <button class="tab-btn" onclick="switchTab('info', this)">ℹ️ Information & Links</button>
+        <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
+    </div>
+
+    <div class="sidebar-footer">
+        <div id="dataInfo">Loading database status...</div>
+    </div>
 </div>
 
-<div class="tabs-bar">
-    <button class="tab-btn active" onclick="switchTab('search', this)">🔍 Search & Investigation</button>
-    <button class="tab-btn" onclick="switchTab('org', this)">🏢 AWS Organization Topology</button>
-    <button class="tab-btn" onclick="switchTab('pan', this)">🔥 PAN-OS Panorama Topology</button>
-    <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
-</div>
+<!-- Main Area -->
+<div class="main-wrapper">
 
-<div class="container">
+    <!-- TAB 1: Search -->
     <div id="tab-search" class="tab-content active">
         <div class="search-panel">
             <div class="search-row">
@@ -783,6 +869,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
+    <!-- TAB 2: AWS Org Topology -->
     <div id="tab-org" class="tab-content">
         <div class="section">
             <div class="section-title">
@@ -795,6 +882,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
+    <!-- TAB 3: Panorama Topology -->
     <div id="tab-pan" class="tab-content">
         <div class="section">
             <div class="section-title">
@@ -807,6 +895,102 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
+    <!-- TAB 4: Automation Results -->
+    <div id="tab-automation" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>Automation Job & Collection Results</h2>
+                <span class="count">Live Status</span>
+            </div>
+            <div style="padding: 20px;">
+                <h3 style="margin-top: 0; font-size: 15px;">AWS Automated Collections</h3>
+                <div class="status-grid">
+                    <div class="status-card">
+                        <div class="status-card-header">
+                            <span class="status-title">AWS Org Collection</span>
+                            <span class="status-pill success">Successful</span>
+                        </div>
+                        <div class="meta"><b>Source File:</b> org_topology.json</div>
+                        <div class="meta" id="awsOrgDate"><b>File Date:</b> Loading...</div>
+                    </div>
+
+                    <div class="status-card">
+                        <div class="status-card-header">
+                            <span class="status-title">AWS Resource Data Collection</span>
+                            <span class="status-pill success">Successful</span>
+                        </div>
+                        <div class="meta"><b>Source Directory:</b> ./aws_parsed</div>
+                        <div class="meta" id="awsDataDate"><b>File Date:</b> Loading...</div>
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 24px; font-size: 15px;">Palo Alto Automated Collections</h3>
+                <div class="status-grid">
+                    <div class="status-card">
+                        <div class="status-card-header">
+                            <span class="status-title">Panorama Topology Collection</span>
+                            <span class="status-pill success">Successful</span>
+                        </div>
+                        <div class="meta"><b>Source File:</b> panorama_topology.json</div>
+                        <div class="meta" id="panOrgDate"><b>File Date:</b> Loading...</div>
+                    </div>
+
+                    <div class="status-card">
+                        <div class="status-card-header">
+                            <span class="status-title">Palo Alto Data Collection</span>
+                            <span class="status-pill success">Successful</span>
+                        </div>
+                        <div class="meta"><b>Source Directory:</b> ./parsed</div>
+                        <div class="meta" id="panDataDate"><b>File Date:</b> Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 5: Useful Links & Info -->
+    <div id="tab-info" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>Useful Links & Infrastructure Documentation</h2>
+            </div>
+            <div style="padding: 20px;">
+                <p style="margin-top:0; color: var(--text-secondary); font-size: 14px;">Quick access to internal documentation, dashboards, and security portals.</p>
+                <div class="link-grid">
+                    <div class="link-card">
+                        <div>
+                            <h4>AWS Management Console</h4>
+                            <p>Direct SSO portal access for cloud tenant administration and EC2 instance management.</p>
+                        </div>
+                        <a href="https://aws.amazon.com/console/" target="_blank">Open Console &rarr;</a>
+                    </div>
+                    <div class="link-card">
+                        <div>
+                            <h4>Palo Alto Panorama Portal</h4>
+                            <p>Centralized firewall policy manager, security profile configuration, and network rule inspection.</p>
+                        </div>
+                        <a href="#" onclick="alert('Configure internal Panorama URL in script.'); return false;">Open Panorama &rarr;</a>
+                    </div>
+                    <div class="link-card">
+                        <div>
+                            <h4>Internal IPAM Portal</h4>
+                            <p>Centralized IP Address Management database and subnet allocation records.</p>
+                        </div>
+                        <a href="#" onclick="alert('Configure internal IPAM URL in script.'); return false;">Open IPAM &rarr;</a>
+                    </div>
+                    <div class="link-card">
+                        <div>
+                            <h4>Security Runbooks & Docs</h4>
+                            <p>Guides for security group management, firewall rule requests, and Incident Response procedures.</p>
+                        </div>
+                        <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Documentation &rarr;</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 6: Stats -->
     <div id="tab-stats" class="tab-content">
         <div class="stats-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 16px;">
             <div class="card">
@@ -819,6 +1003,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
             </div>
         </div>
     </div>
+
 </div>
 
 <script>
@@ -830,6 +1015,7 @@ function switchTab(tabId, btn) {
 
     if (tabId === 'org') loadOrgTopology();
     if (tabId === 'pan') loadPanTopology();
+    if (tabId === 'automation') loadAutomationResults();
     if (tabId === 'stats') loadStats();
 }
 
@@ -843,8 +1029,8 @@ function setSummary(s) {
         <div class="summary">
             <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
-            <div class="card palo-card"><b>${s.firewall_objects}</b><span>Palo Alto Objects / Rules</span></div>
-            <div class="card"><b>Strict Engine</b><span>ENI Scoping & Palo CIDRs</span></div>
+            <div class="card palo-card"><b>${s.palo_objects}</b><span>Palo Alto Objects & Groups</span></div>
+            <div class="card palo-card"><b>${s.palo_rules}</b><span>Palo Alto Security & NAT Rules</span></div>
         </div>
     `;
 }
@@ -864,7 +1050,7 @@ function renderPaloAltoDetails(x) {
     const cat = (x.type || "").toLowerCase();
     let html = "";
 
-    if (cat.includes("security_rules") || cat.includes("security")) {
+    if (cat.includes("security_rules") || cat.includes("security") || cat.includes("nat")) {
         const action = d.action || "allow";
         const actionBadge = action === "allow" 
             ? `<span class="rule-tag allow">ALLOW</span>` 
@@ -938,7 +1124,8 @@ function render(data) {
     let html = "";
     if (data.aws_matches.length) html += section("Matching AWS Resources", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
     if (data.attached_security_groups.length) html += section("Attached Security Groups", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
-    if (data.matched_addresses.length) html += section("Palo Alto Objects & Rules", data.matched_addresses.length, data.matched_addresses.map(x => itemHTML(x, "palo")).join(""));
+    if (data.matched_objects.length) html += section("Palo Alto Objects & Groups", data.matched_objects.length, data.matched_objects.map(x => itemHTML(x, "palo")).join(""));
+    if (data.matched_rules.length) html += section("Palo Alto Security Rules & NATs", data.matched_rules.length, data.matched_rules.map(x => itemHTML(x, "palo")).join(""));
     if (!html) html = `<div class="empty">No matching records found.</div>`;
     document.getElementById("output").innerHTML = html;
 }
@@ -1016,6 +1203,17 @@ async function loadPanTopology() {
     }
 }
 
+async function loadAutomationResults() {
+    try {
+        const r = await fetch("/api/automation/status");
+        const data = await r.json();
+        document.getElementById("awsOrgDate").innerHTML = `<b>File Date:</b> ${esc(data.aws_org_mtime)}`;
+        document.getElementById("awsDataDate").innerHTML = `<b>File Date:</b> ${esc(data.aws_data_mtime)}`;
+        document.getElementById("panOrgDate").innerHTML = `<b>File Date:</b> ${esc(data.pan_org_mtime)}`;
+        document.getElementById("panDataDate").innerHTML = `<b>File Date:</b> ${esc(data.pan_data_mtime)}`;
+    } catch(e) {}
+}
+
 async function loadStats() {
     try {
         const r = await fetch("/api/stats");
@@ -1049,7 +1247,7 @@ async function loadInfo() {
     try {
         const r = await fetch("/api/info");
         const x = await r.json();
-        document.getElementById("dataInfo").textContent = x.files + " indexed items | " + x.devices + " devices";
+        document.getElementById("dataInfo").innerHTML = `<b>Database:</b> ${x.files} items | ${x.devices} devices`;
     } catch(e) {}
 }
 
@@ -1074,6 +1272,15 @@ def api_info():
 @app.route("/api/stats")
 def api_stats():
     return jsonify(PANOS.get_stats())
+
+@app.route("/api/automation/status")
+def api_automation_status():
+    return jsonify({
+        "aws_org_mtime": get_file_modified_time(ORG_FILE_PATH),
+        "aws_data_mtime": get_latest_dir_mtime(AWS_DATA_ROOT),
+        "pan_org_mtime": get_file_modified_time(PAN_TOPOLOGY_PATH),
+        "pan_data_mtime": get_latest_dir_mtime(FW_DATA_ROOT)
+    })
 
 @app.route("/api/topology/aws")
 def api_topology_aws():
@@ -1108,7 +1315,7 @@ def api_investigate():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Multi-Tab Unified Infrastructure Intelligence Dashboard")
+    parser = argparse.ArgumentParser(description="Left-Sidebar Infrastructure Intelligence Dashboard")
     parser.add_argument("--firewall-data", default="./parsed", help="Path to parsed Firewall JSON folder")
     parser.add_argument("--aws-data", default="./aws_parsed", help="Path to parsed AWS JSON folder")
     parser.add_argument("--org-file", default="org_topology.json", help="Path to AWS Org topology JSON file")
