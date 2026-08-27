@@ -4,7 +4,7 @@ Infrastructure Intelligence GUI (Multi-Tab Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
   1. Search & Investigation (Full Cascading Resource & Security Group Correlation)
-  2. AWS Organization Topology Explorer (Expandable Tree with Account IDs & Names)
+  2. AWS Organization Topology Explorer
   3. PAN-OS Panorama Topology & Mapping
   4. Data Collection Metrics & Analytics
 
@@ -100,26 +100,13 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
         device_cache[dev_name] = row["id"]
         return row["id"]
 
-    # Ingest PAN-OS Data
     if fw_root.exists():
-        rule_types = {
-            "security_rules", "nat_rules", "pbf_rules", "qos_rules",
-            "decryption_rules", "application_override_rules", "authentication_rules"
-        }
-        object_types = {
-            "addresses", "address_groups", "services", "service_groups",
-            "tags", "zones", "interfaces", "virtual_routers", "ipsec_tunnels"
-        }
-
         for path in sorted(fw_root.rglob("*.json")):
             if not path.is_file():
                 continue
             rel = path.relative_to(fw_root)
             device = rel.parts[0] if len(rel.parts) > 1 else "(root)"
             file_type = path.stem
-
-            if file_type not in rule_types and file_type not in object_types:
-                continue
 
             try:
                 with path.open("r", encoding="utf-8") as f:
@@ -133,10 +120,8 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
             for item in candidates:
                 if not isinstance(item, dict):
                     continue
-                name = ""
-                if item.get("name"):
-                    name = str(item["name"])
-                else:
+                name = item.get("name", "")
+                if not name:
                     for key in ("object", "rule", "profile"):
                         val = item.get(key)
                         if isinstance(val, dict) and val.get("name"):
@@ -145,10 +130,9 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
 
                 cursor.execute(
                     "INSERT INTO records (device_id, platform, category, filename, name, data) VALUES (?, ?, ?, ?, ?, ?)",
-                    (dev_id, "panos", file_type, path.name, name, json.dumps(item))
+                    (dev_id, "panos", file_type, path.name, str(name), json.dumps(item))
                 )
 
-    # Ingest AWS Data
     if aws_root.exists():
         for path in sorted(aws_root.rglob("*.json")):
             if not path.is_file():
@@ -193,7 +177,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
 
 
 # ----------------------------------------------------------------------
-# Fast Search Engine
+# Search Engine
 # ----------------------------------------------------------------------
 
 class InfrastructureDataSource:
@@ -280,14 +264,8 @@ class InfrastructureDataSource:
 
         matched_aws_record_ids = set()
         matched_sg_ids = set()
-        discovered_ip_networks = set()
-
-        if query_network:
-            discovered_ip_networks.add(query_network)
-
         pending_aws_lookups = []
 
-        # High-Speed Database Query Execution via SQL Pattern & FTS5
         if query_network:
             target_ip = str(query_network.network_address)
             target_cidr = query_network.compressed
@@ -322,7 +300,6 @@ class InfrastructureDataSource:
                         matched_aws_record_ids.add(row["id"])
                         pending_aws_lookups.append((row, []))
 
-        # Fast Cascading Relationship Lookups
         processed_count = 0
         while processed_count < len(pending_aws_lookups):
             row, hits = pending_aws_lookups[processed_count]
@@ -364,19 +341,6 @@ class InfrastructureDataSource:
                     sg_id = group.get("GroupId")
                     if sg_id:
                         matched_sg_ids.add((dev_name, sg_id))
-                
-                attachment = item.get("Attachment", {})
-                att_inst_id = attachment.get("InstanceId")
-                if att_inst_id:
-                    cursor.execute("""
-                        SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
-                        FROM records r JOIN devices d ON r.device_id = d.id
-                        WHERE r.category = 'ec2_instances' AND r.name = ? AND d.name = ?
-                    """, (att_inst_id, dev_name))
-                    for inst_row in cursor.fetchall():
-                        if inst_row["id"] not in matched_aws_record_ids:
-                            matched_aws_record_ids.add(inst_row["id"])
-                            pending_aws_lookups.append((inst_row, []))
 
             elif cat == "rds_instances":
                 for group in item.get("VpcSecurityGroups", []):
@@ -384,7 +348,6 @@ class InfrastructureDataSource:
                     if sg_id:
                         matched_sg_ids.add((dev_name, sg_id))
 
-        # Fetch Security Groups
         for dev_name, sg_id in matched_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
@@ -407,18 +370,23 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # Fetch PAN-OS Records
+        # Deep Palo Alto Matching Engine
         matched_panos_ids = set()
         if query_network:
             ip_str = str(query_network.network_address)
             cidr_str = query_network.compressed
+            ip_with_32 = f"{ip_str}/32"
+
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos' AND (r.data LIKE ? OR r.data LIKE ?)
+                WHERE r.platform = 'panos' AND (
+                    r.data LIKE ? OR r.data LIKE ? OR r.data LIKE ? OR r.name LIKE ?
+                )
                 LIMIT ?
-            """, (f"%{ip_str}%", f"%{cidr_str}%", limit))
+            """, (f"%{ip_str}%", f"%{cidr_str}%", f"%{ip_with_32}%", f"%{ip_str}%", limit))
+            
             for row in cursor.fetchall():
                 if row["id"] not in matched_panos_ids:
                     matched_panos_ids.add(row["id"])
@@ -465,9 +433,8 @@ class InfrastructureDataSource:
 
 PANOS = InfrastructureDataSource()
 
-
 # ----------------------------------------------------------------------
-# Modern Multi-Tab HTML / CSS Template
+# GUI Frontend Template
 # ----------------------------------------------------------------------
 
 HTML = r"""
@@ -652,6 +619,11 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 .rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; }
 .rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; }
 
+.org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
+.tree-node { margin-left: 20px; padding: 4px 0; }
+.tree-folder { color: #60a5fa; font-weight: bold; cursor: pointer; }
+.tree-leaf { color: #cbd5e1; }
+
 .empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 </style>
 </head>
@@ -684,7 +656,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 <b>Deep Cascade:</b> Searching an Instance ID automatically surfaces its EC2 details, attached ENIs, bound Security Groups, and correlates its IPs to Palo Alto rules.
+                💡 <b>Deep Cascade:</b> Searching an IP surfaces matching AWS resources, associated Security Groups, and correlates relevant Palo Alto rules.
             </div>
         </div>
 
@@ -701,7 +673,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <span id="orgMeta" class="count">Ready</span>
             </div>
             <div style="padding: 20px;" id="orgTreeView" class="org-tree">
-                <div class="empty">Click tab to load topology...</div>
+                <div class="empty">Loading organization topology...</div>
             </div>
         </div>
     </div>
@@ -713,7 +685,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <span id="panMeta" class="count">Ready</span>
             </div>
             <div style="padding: 20px;" id="panTreeView" class="org-tree">
-                <div class="empty">Click tab to load topology...</div>
+                <div class="empty">Loading panorama topology...</div>
             </div>
         </div>
     </div>
@@ -725,7 +697,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <div id="awsStats"><div class="empty">Loading stats...</div></div>
             </div>
             <div class="card">
-                <h3 style="margin-top:0;">🛡️ PAN-OS Firewall Inventory</h3>
+                <h3 style="margin-top:0; color:var(--palo-orange);">🛡️ PAN-OS Firewall Inventory</h3>
                 <div id="panosStats"><div class="empty">Loading stats...</div></div>
             </div>
         </div>
@@ -738,6 +710,10 @@ function switchTab(tabId, btn) {
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
     document.getElementById('tab-' + tabId).classList.add('active');
     btn.classList.add('active');
+
+    if (tabId === 'org') loadOrgTopology();
+    if (tabId === 'pan') loadPanTopology();
+    if (tabId === 'stats') loadStats();
 }
 
 function esc(value) {
@@ -863,6 +839,87 @@ async function investigate() {
     }
 }
 
+function buildTreeHTML(node) {
+    if (!node) return '';
+    let html = '';
+    const name = node.Name || node.Id || node.name || 'Unit';
+    const accounts = node.Accounts || node.AccountList || [];
+    const children = node.OUs || node.Children || node.SubOUs || [];
+
+    html += `<div class="tree-node">`;
+    html += `<span class="tree-folder">📁 ${esc(name)}</span>`;
+    
+    if (accounts.length > 0) {
+        html += `<div style="margin-left: 20px;">`;
+        accounts.forEach(acc => {
+            const accName = acc.Name || acc.Id || acc.Id;
+            const accId = acc.Id || acc.AccountId || '';
+            html += `<div class="tree-leaf">📄 ${esc(accName)} <span style="color:var(--text-secondary);">(${esc(accId)})</span></div>`;
+        });
+        html += `</div>`;
+    }
+
+    if (children.length > 0) {
+        html += `<div style="margin-left: 10px;">`;
+        children.forEach(child => html += buildTreeHTML(child));
+        html += `</div>`;
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+async function loadOrgTopology() {
+    try {
+        const r = await fetch("/api/topology/aws");
+        const data = await r.json();
+        if (data.error) {
+            document.getElementById("orgTreeView").innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+            return;
+        }
+        document.getElementById("orgTreeView").innerHTML = buildTreeHTML(data.Hierarchy || data);
+        document.getElementById("orgMeta").textContent = "Loaded";
+    } catch(e) {
+        document.getElementById("orgTreeView").innerHTML = `<div class="empty">Unable to render topology tree.</div>`;
+    }
+}
+
+async function loadPanTopology() {
+    try {
+        const r = await fetch("/api/topology/pan");
+        const data = await r.json();
+        if (data.error) {
+            document.getElementById("panTreeView").innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+            return;
+        }
+        document.getElementById("panTreeView").innerHTML = `<pre>${jsonStr(data)}</pre>`;
+        document.getElementById("panMeta").textContent = "Loaded";
+    } catch(e) {
+        document.getElementById("panTreeView").innerHTML = `<div class="empty">Unable to render Panorama topology.</div>`;
+    }
+}
+
+async function loadStats() {
+    try {
+        const r = await fetch("/api/stats");
+        const data = await r.json();
+        
+        let awsHTML = `<table class="prop-table">`;
+        for (const [k, v] of Object.entries(data.aws_resources || {})) {
+            awsHTML += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
+        }
+        awsHTML += `</table>`;
+        document.getElementById("awsStats").innerHTML = awsHTML;
+
+        let panosHTML = `<table class="prop-table">`;
+        for (const [k, v] of Object.entries(data.panos || {})) {
+            panosHTML += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
+        }
+        panosHTML += `</table>`;
+        document.getElementById("panosStats").innerHTML = panosHTML;
+    } catch(e) {}
+}
+
 function clearAll() {
     document.getElementById("query").value = "";
     document.getElementById("summary").innerHTML = "";
@@ -900,6 +957,26 @@ def api_info():
 @app.route("/api/stats")
 def api_stats():
     return jsonify(PANOS.get_stats())
+
+@app.route("/api/topology/aws")
+def api_topology_aws():
+    if ORG_FILE_PATH.exists():
+        try:
+            with ORG_FILE_PATH.open("r", encoding="utf-8") as f:
+                return jsonify(json.load(f))
+        except Exception as e:
+            return jsonify({"error": f"Failed to read AWS Org topology file: {str(e)}"}), 500
+    return jsonify({"error": "AWS Organization Topology file not found."}), 404
+
+@app.route("/api/topology/pan")
+def api_topology_pan():
+    if PAN_TOPOLOGY_PATH.exists():
+        try:
+            with PAN_TOPOLOGY_PATH.open("r", encoding="utf-8") as f:
+                return jsonify(json.load(f))
+        except Exception as e:
+            return jsonify({"error": f"Failed to read Panorama topology file: {str(e)}"}), 500
+    return jsonify({"error": "Panorama Topology file not found."}), 404
 
 @app.route("/api/investigate")
 def api_investigate():
