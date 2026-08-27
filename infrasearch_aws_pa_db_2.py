@@ -3,7 +3,7 @@
 Infrastructure Intelligence GUI (Multi-Tab Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
-  1. Search & Investigation (Full Cascading Resource & Security Group Correlation)
+  1. Search & Investigation (Strict Cascading Resource & Security Group Correlation)
   2. AWS Organization Topology Explorer
   3. PAN-OS Panorama Topology & Mapping
   4. Data Collection Metrics & Analytics
@@ -34,61 +34,84 @@ AWS_DATA_ROOT = Path("aws_parsed").resolve()
 ORG_FILE_PATH = Path("org_topology.json").resolve()
 PAN_TOPOLOGY_PATH = Path("panorama_topology.json").resolve()
 
+
 # ----------------------------------------------------------------------
-# Helper Functions for SG Extraction and IP Matching
+# IP and Subnet Matching Helpers
 # ----------------------------------------------------------------------
 
-def extract_sg_ids(data: Any) -> set[str]:
-    """Recursively extracts all Security Group IDs from any nested dictionary/list structure."""
-    sg_ids = set()
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if k in ("GroupId", "VpcSecurityGroupId") and isinstance(v, str) and v.startswith("sg-"):
-                sg_ids.add(v)
-            elif k in ("SecurityGroups", "Groups", "VpcSecurityGroups") and isinstance(v, list):
-                for item in v:
-                    if isinstance(item, str) and item.startswith("sg-"):
-                        sg_ids.add(item)
-                    elif isinstance(item, dict):
-                        gid = item.get("GroupId") or item.get("VpcSecurityGroupId")
-                        if gid and isinstance(gid, str) and gid.startswith("sg-"):
-                            sg_ids.add(gid)
-            else:
-                sg_ids.update(extract_sg_ids(v))
-    elif isinstance(data, list):
-        for item in data:
-            sg_ids.update(extract_sg_ids(item))
-    return sg_ids
-
-
-def sqlite_ip_contains(ip_str: str, cidr_or_ip_str: str) -> int:
-    """Checks if a target IP falls inside a CIDR block, IP range, or string definition."""
-    if not ip_str or not cidr_or_ip_str:
-        return 0
+def extract_ip_or_cidr(val: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
+    if not val:
+        return None
+    val = str(val).strip()
     try:
-        target_ip = ipaddress.ip_address(str(ip_str).strip())
+        if "/" in val:
+            return ipaddress.ip_network(val, strict=False)
+        return ipaddress.ip_network(val + "/32", strict=False)
     except ValueError:
+        return None
+
+
+def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
+    """Checks if a target IP or Subnet overlaps with a firewall definition."""
+    if not target_str or not cidr_or_range_str:
+        return 0
+    
+    target_net = extract_ip_or_cidr(target_str)
+    if not target_net:
         return 0
 
-    val = str(cidr_or_ip_str).strip()
+    val = str(cidr_or_range_str).strip()
     
-    # Handle Range: 10.0.0.1-10.0.0.250
+    # Range check: 10.0.0.1-10.0.0.50
     if "-" in val and "/" not in val:
         parts = val.split("-")
         if len(parts) == 2:
             try:
                 start = ipaddress.ip_address(parts[0].strip())
                 end = ipaddress.ip_address(parts[1].strip())
-                return 1 if start <= target_ip <= end else 0
+                return 1 if start <= target_net.network_address <= end else 0
             except ValueError:
                 pass
 
-    # Handle CIDR / Single IP: 10.0.0.0/24 or 10.0.0.1
-    try:
-        net = ipaddress.ip_network(val, strict=False)
-        return 1 if target_ip in net else 0
-    except ValueError:
-        return 0
+    # Subnet / CIDR Overlap Check
+    fw_net = extract_ip_or_cidr(val)
+    if fw_net:
+        return 1 if target_net.overlaps(fw_net) else 0
+        
+    return 0
+
+
+def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
+    """Strictly extracts SGs directly attached to an ENI or EC2 Instance JSON block."""
+    sg_ids = set()
+    
+    # Direct ENI / Instance "Groups" or "SecurityGroups" array
+    groups = item.get("Groups") or item.get("SecurityGroups") or item.get("groups")
+    if isinstance(groups, list):
+        for g in groups:
+            if isinstance(g, str) and g.startswith("sg-"):
+                sg_ids.add(g)
+            elif isinstance(g, dict):
+                gid = g.get("GroupId") or g.get("VpcSecurityGroupId")
+                if gid:
+                    sg_ids.add(gid)
+
+    # Checked nested NetworkInterfaces inside EC2 payloads
+    nis = item.get("NetworkInterfaces")
+    if isinstance(nis, list):
+        for ni in nis:
+            if isinstance(ni, dict):
+                ni_groups = ni.get("Groups") or ni.get("SecurityGroups")
+                if isinstance(ni_groups, list):
+                    for g in ni_groups:
+                        if isinstance(g, str) and g.startswith("sg-"):
+                            sg_ids.add(g)
+                        elif isinstance(g, dict):
+                            gid = g.get("GroupId") or g.get("VpcSecurityGroupId")
+                            if gid:
+                                sg_ids.add(gid)
+                                
+    return sg_ids
 
 
 def get_db(db_file: Path | None = None):
@@ -292,18 +315,9 @@ class InfrastructureDataSource:
         conn.close()
         return count
 
-    def parse_network(self, value):
-        value = str(value).strip()
-        try:
-            if "/" in value:
-                return ipaddress.ip_network(value, strict=False)
-            return ipaddress.ip_network(value + "/32", strict=False)
-        except ValueError:
-            return None
-
     def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         query = query.strip()
-        query_network = self.parse_network(query)
+        query_network = extract_ip_or_cidr(query)
         
         output = {
             "query": query,
@@ -319,10 +333,14 @@ class InfrastructureDataSource:
         cursor = conn.cursor()
 
         matched_aws_record_ids = set()
-        matched_sg_ids = set()  # Set of (device_name, sg_id)
-        pending_aws_lookups = []
+        attached_sg_ids = set()  # Set of (device_name, sg_id)
+        related_cidrs_to_match = set()
 
-        # 1. Primary AWS Lookup
+        if query_network:
+            related_cidrs_to_match.add(query_network.compressed)
+
+        # 1. AWS Initial Lookup
+        pending_aws_lookups = []
         if query_network:
             target_ip = str(query_network.network_address)
             target_cidr = query_network.compressed
@@ -338,7 +356,7 @@ class InfrastructureDataSource:
             for row in cursor.fetchall():
                 if row["id"] not in matched_aws_record_ids:
                     matched_aws_record_ids.add(row["id"])
-                    pending_aws_lookups.append((row, []))
+                    pending_aws_lookups.append(row)
         else:
             clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
             if clean_q:
@@ -355,13 +373,10 @@ class InfrastructureDataSource:
                 for row in cursor.fetchall():
                     if row["id"] not in matched_aws_record_ids:
                         matched_aws_record_ids.add(row["id"])
-                        pending_aws_lookups.append((row, []))
+                        pending_aws_lookups.append(row)
 
-        # 2. Extract Security Groups using Recursive AST Inspection
-        processed_count = 0
-        while processed_count < len(pending_aws_lookups):
-            row, hits = pending_aws_lookups[processed_count]
-            processed_count += 1
+        # 2. Extract Attached Security Groups strictly & Harvest Subnet/VPC CIDRs
+        for row in pending_aws_lookups:
             item = json.loads(row["data"])
 
             output["aws_matches"].append({
@@ -369,31 +384,47 @@ class InfrastructureDataSource:
                 "type": row["category"],
                 "file": row["filename"],
                 "name": row["name"],
-                "data": item,
-                "matches": hits
+                "data": item
             })
 
             dev_name = row["device"]
-            found_sgs = extract_sg_ids(item)
-            for sg in found_sgs:
-                matched_sg_ids.add((dev_name, sg))
+            
+            # Extract STRICT attached Security Groups
+            direct_sgs = extract_direct_attached_sg_ids(item)
+            for sg_id in direct_sgs:
+                attached_sg_ids.add((dev_name, sg_id))
 
-            # Cascade: EC2 Instance -> Network Interfaces
-            if row["category"] == "ec2_instances":
-                inst_id = item.get("InstanceId")
-                if inst_id:
-                    cursor.execute("""
-                        SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
-                        FROM records r JOIN devices d ON r.device_id = d.id
-                        WHERE r.category LIKE '%eni%' AND r.data LIKE ? AND d.name = ?
-                    """, (f"%{inst_id}%", dev_name))
-                    for eni_row in cursor.fetchall():
-                        if eni_row["id"] not in matched_aws_record_ids:
-                            matched_aws_record_ids.add(eni_row["id"])
-                            pending_aws_lookups.append((eni_row, []))
+            # Resolve Subnet / VPC CIDRs for Palo Correlation
+            subnet_id = item.get("SubnetId")
+            vpc_id = item.get("VpcId")
 
-        # 3. Pull Full Record Payloads for Discovered Security Groups
-        for dev_name, sg_id in matched_sg_ids:
+            if subnet_id:
+                cursor.execute("""
+                    SELECT data FROM records r JOIN devices d ON r.device_id = d.id
+                    WHERE r.category LIKE '%subnet%' AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
+                """, (subnet_id, f'%"SubnetId": "{subnet_id}"%', dev_name))
+                for s_row in cursor.fetchall():
+                    s_data = json.loads(s_row["data"])
+                    cidr = s_data.get("CidrBlock")
+                    if cidr:
+                        related_cidrs_to_match.add(cidr)
+
+            if vpc_id:
+                cursor.execute("""
+                    SELECT data FROM records r JOIN devices d ON r.device_id = d.id
+                    WHERE r.category LIKE '%vpc%' AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
+                """, (vpc_id, f'%"VpcId": "{vpc_id}"%', dev_name))
+                for v_row in cursor.fetchall():
+                    v_data = json.loads(v_row["data"])
+                    cidr = v_data.get("CidrBlock")
+                    if cidr:
+                        related_cidrs_to_match.add(cidr)
+                    for block in v_data.get("CidrBlockAssociationSet", []):
+                        if isinstance(block, dict) and block.get("CidrBlock"):
+                            related_cidrs_to_match.add(block["CidrBlock"])
+
+        # 3. Resolve Payload for ONLY Attached SGs
+        for dev_name, sg_id in attached_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                 FROM records r
@@ -415,7 +446,7 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # 4. Palo Alto Correlation Engine (Addresses, Address Groups & Security Rules)
+        # 4. PAN-OS Correlation Engine (Host IP, Subnet CIDR, and VPC CIDR Matcher)
         matched_panos_ids = set()
         matched_object_names = set()
 
@@ -428,27 +459,25 @@ class InfrastructureDataSource:
         
         all_panos_records = cursor.fetchall()
 
-        if query_network:
-            target_ip_str = str(query_network.network_address)
-
-            # Phase A: Match direct IP / CIDR / Subnets inside Address objects
+        if related_cidrs_to_match:
+            # Phase A: Find Palo Address Objects that match Target IP or Subnet/VPC CIDRs
             for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
-
-                # Convert data to string for broad text checking if needed
-                data_str = json.dumps(item_data)
-
-                # Check explicit PAN-OS object structures
+                
                 ip_netmask = item_data.get("ip-netmask") or item_data.get("ip_netmask") or item_data.get("ip")
                 ip_range = item_data.get("ip-range") or item_data.get("ip_range")
                 
-                if ip_netmask and sqlite_ip_contains(target_ip_str, ip_netmask):
-                    is_match = True
-                elif ip_range and sqlite_ip_contains(target_ip_str, ip_range):
-                    is_match = True
-                elif target_ip_str in data_str:
-                    is_match = True
+                check_targets = [ip_netmask, ip_range]
+                
+                # Check for overlap against all collected CIDRs (Host, Subnet, VPC)
+                for cidr in related_cidrs_to_match:
+                    for target in check_targets:
+                        if target and sqlite_ip_contains(cidr, target):
+                            is_match = True
+                            break
+                    if is_match:
+                        break
 
                 if is_match:
                     matched_panos_ids.add(row["id"])
@@ -463,7 +492,7 @@ class InfrastructureDataSource:
                         "data": item_data
                     })
 
-            # Phase B: Cascading correlation for Address Groups and Rules referencing matched object names
+            # Phase B: Cascading correlation for Address Groups and Security Rules referencing matched names
             if matched_object_names:
                 for row in all_panos_records:
                     if row["id"] in matched_panos_ids:
@@ -472,7 +501,7 @@ class InfrastructureDataSource:
                     data_str = json.dumps(item_data)
                     
                     for name in list(matched_object_names):
-                        if f'"{name}"' in data_str or name in item_data.get("static", []) or name in item_data.get("members", []):
+                        if f'"{name}"' in data_str:
                             matched_panos_ids.add(row["id"])
                             obj_name = row["name"] or item_data.get("name")
                             if obj_name:
@@ -744,7 +773,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 Recursive security group extraction and Palo Alto subnet math enabled.
+                💡 Strict attached Security Group scoping and host/subnet/VPC network matching enabled.
             </div>
         </div>
 
@@ -815,7 +844,7 @@ function setSummary(s) {
             <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
             <div class="card palo-card"><b>${s.firewall_objects}</b><span>Palo Alto Objects / Rules</span></div>
-            <div class="card"><b>SQLite</b><span>Engine: Recursive AST Search</span></div>
+            <div class="card"><b>Strict Engine</b><span>ENI Scoping & Palo CIDRs</span></div>
         </div>
     `;
 }
