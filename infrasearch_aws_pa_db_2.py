@@ -493,7 +493,7 @@ PANOS = InfrastructureDataSource()
 
 
 # ----------------------------------------------------------------------
-# Modern Multi-Tab HTML / CSS Template
+# Modern Multi-Tab HTML / CSS Template (Dark Mode & Clean PAN-OS UI)
 # ----------------------------------------------------------------------
 
 HTML = r"""
@@ -502,57 +502,65 @@ HTML = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Infrastructure Intelligence — Unified Dashboard</title>
+<title>Infrastructure Intelligence — Unified Dark Dashboard</title>
 <style>
 :root {
-    --bg-main: #0f172a;
-    --bg-surface: #1e293b;
-    --bg-card: #ffffff;
-    --border-color: #e2e8f0;
-    --text-primary: #0f172a;
-    --text-secondary: #64748b;
+    --bg-main: #090d16;
+    --bg-surface: #0f172a;
+    --bg-card: #1e293b;
+    --bg-card-hover: #26354a;
+    --border-color: #334155;
+    --border-light: #475569;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
     --accent: #3b82f6;
     --accent-hover: #2563eb;
+    --palo-orange: #ff6b00;
+    --palo-orange-dark: #cc5500;
+    --code-bg: #090d16;
 }
 
 * { box-sizing: border-box; }
 
 body {
     margin: 0;
-    background: #f8fafc;
+    background: var(--bg-main);
     color: var(--text-primary);
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 .topbar {
-    background: var(--bg-main);
+    background: var(--bg-surface);
     color: white;
     padding: 14px 28px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
 }
 
 .brand { display: flex; gap: 12px; align-items: center; }
 .logo {
-    width: 36px; height: 36px; border-radius: 8px; background: var(--accent);
-    display: grid; place-items: center; font-weight: bold; font-size: 15px;
+    width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #1d4ed8);
+    display: grid; place-items: center; font-weight: bold; font-size: 15px; color: white;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
 }
-.brand h1 { margin: 0; font-size: 17px; font-weight: 600; }
-.brand small { color: #94a3b8; font-size: 11px; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: 0.5px; }
+.brand small { color: var(--text-secondary); font-size: 11px; }
 
 .tabs-bar {
-    background: #1e293b;
+    background: #0c1322;
     padding: 0 28px;
     display: flex;
     gap: 6px;
     overflow-x: auto;
+    border-bottom: 1px solid var(--border-color);
 }
 
 .tab-btn {
     background: transparent;
-    color: #94a3b8;
+    color: var(--text-secondary);
     border: none;
     padding: 12px 20px;
     font-size: 14px;
@@ -563,18 +571,18 @@ body {
     white-space: nowrap;
 }
 
-.tab-btn:hover { color: #f8fafc; }
-.tab-btn.active { color: #ffffff; border-bottom-color: var(--accent); background: rgba(255,255,255,0.03); }
+.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.02); }
+.tab-btn.active { color: #ffffff; border-bottom-color: var(--accent); background: var(--bg-surface); }
 
 .container { max-width: 1600px; margin: 24px auto; padding: 0 24px; }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
 
 .search-panel {
-    background: var(--bg-card);
+    background: var(--bg-surface);
     border-radius: 12px;
     padding: 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
     border: 1px solid var(--border-color);
 }
 
@@ -583,18 +591,21 @@ body {
 
 input, button {
     height: 44px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 0 14px;
     font-size: 14px;
     outline: none;
+    background: var(--bg-main);
+    color: var(--text-primary);
 }
-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
-button { background: var(--accent); color: white; border: 0; font-weight: 600; cursor: pointer; }
+input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25); }
+button { background: var(--accent); color: white; border: 0; font-weight: 600; cursor: pointer; transition: background 0.2s; }
 button:hover { background: var(--accent-hover); }
-button.secondary { background: #64748b; }
+button.secondary { background: #334155; color: var(--text-primary); }
+button.secondary:hover { background: #475569; }
 
-.hint { color: var(--text-secondary); font-size: 13px; margin-top: 8px; }
+.hint { color: var(--text-secondary); font-size: 13px; margin-top: 10px; }
 
 .summary {
     display: grid;
@@ -604,20 +615,22 @@ button.secondary { background: #64748b; }
 }
 
 .card {
-    background: var(--bg-card);
+    background: var(--bg-surface);
     padding: 16px;
     border-radius: 10px;
     border: 1px solid var(--border-color);
 }
-.card b { display: block; font-size: 22px; color: var(--accent); }
-.card span { color: var(--text-secondary); font-size: 12px; margin-top: 4px; display: block; }
+.card b { display: block; font-size: 24px; color: var(--accent); font-weight: 700; }
+.card.palo-card b { color: var(--palo-orange); }
+.card span { color: var(--text-secondary); font-size: 12px; margin-top: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }
 
 .section {
-    background: var(--bg-card);
+    background: var(--bg-surface);
     border-radius: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
     border: 1px solid var(--border-color);
     overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
 .section-title {
@@ -626,13 +639,14 @@ button.secondary { background: #64748b; }
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #f8fafc;
+    background: #141e33;
 }
-.section-title h2 { font-size: 14px; margin: 0; font-weight: 600; }
-.count { background: #e2e8f0; border-radius: 20px; padding: 2px 8px; font-size: 11px; font-weight: 600; color: #334155; }
+.section-title h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--text-primary); letter-spacing: 0.3px; }
+.count { background: #1e293b; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
-.item { border-bottom: 1px solid #f1f5f9; padding: 16px 18px; }
+.item { border-bottom: 1px solid var(--border-color); padding: 18px; transition: background 0.15s; }
 .item:last-child { border-bottom: 0; }
+.item:hover { background: rgba(255,255,255,0.01); }
 
 .item-head {
     display: flex;
@@ -641,46 +655,52 @@ button.secondary { background: #64748b; }
     flex-wrap: wrap;
     align-items: center;
 }
-.item-name { font-weight: 700; font-size: 14px; }
+.item-name { font-weight: 700; font-size: 15px; color: #ffffff; }
 
 .badge {
     display: inline-block;
-    background: #f1f5f9;
-    color: #475569;
+    background: #334155;
+    color: #cbd5e1;
     border-radius: 6px;
     padding: 3px 8px;
     margin-left: 6px;
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
 }
-.badge.blue { background: #eff6ff; color: #1d4ed8; }
-.badge.green { background: #f0fdf4; color: #15803d; }
-.badge.aws { background: #fff7ed; color: #c2410c; border: 1px solid #ff9900; }
-.badge.sg { background: #faf5ff; color: #7e22ce; border: 1px solid #d8b4fe; }
+.badge.blue { background: #1e3a8a; color: #93c5fd; border: 1px solid #1d4ed8; }
+.badge.green { background: #064e3b; color: #6ee7b7; border: 1px solid #047857; }
+.badge.aws { background: #451a03; color: #fdba74; border: 1px solid #c2410c; }
+.badge.sg { background: #3b0764; color: #d8b4fe; border: 1px solid #7e22ce; }
+.badge.palo { background: rgba(255, 107, 0, 0.15); color: #ff9d5c; border: 1px solid var(--palo-orange); }
 
 .meta { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
-pre { background: #0f172a; color: #e2e8f0; border-radius: 6px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; }
+pre { background: var(--code-bg); color: #e2e8f0; border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
 details { margin-top: 10px; }
 summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
 /* Tree & Properties Views */
-.org-tree details { margin: 6px 0; background: #ffffff; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; }
-.org-tree summary { font-weight: 600; color: #1e293b; font-size: 14px; outline: none; }
+.org-tree details { margin: 6px 0; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; }
+.org-tree summary { font-weight: 600; color: var(--text-primary); font-size: 14px; outline: none; }
 .org-accounts { margin-top: 8px; padding-left: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
-.account-badge { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #334155; }
+.account-badge { background: #0f172a; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #cbd5e1; }
 
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 16px; }
-.stat-card { background: white; border: 1px solid var(--border-color); border-radius: 10px; padding: 20px; }
-.stat-card h3 { margin-top: 0; font-size: 16px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px; }
-.stat-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px dashed #f8fafc; }
+.stat-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 10px; padding: 20px; }
+.stat-card h3 { margin-top: 0; font-size: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; color: var(--text-primary); }
+.stat-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px dashed #1e293b; color: var(--text-secondary); }
+.stat-row b { color: var(--text-primary); }
 
 /* Clean Property Tables */
-.prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: #ffffff; border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0; }
-.prop-table th { background: #f8fafc; color: #475569; text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #e2e8f0; width: 30%; }
-.prop-table td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; color: #1e293b; font-family: monospace; word-break: break-all; }
+.prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: var(--bg-card); border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color); }
+.prop-table th { background: #182238; color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 28%; }
+.prop-table td { padding: 8px 12px; border-bottom: 1px solid #26334d; color: var(--text-primary); font-family: monospace; word-break: break-all; }
 .prop-table tr:last-child td { border-bottom: none; }
-.sub-table-header { font-weight: 600; font-size: 12px; color: #64748b; margin: 12px 0 4px 0; text-transform: uppercase; letter-spacing: 0.5px; }
-.rule-tag { display: inline-block; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid #cbd5e1; }
+.sub-table-header { font-weight: 600; font-size: 12px; color: var(--text-secondary); margin: 14px 0 6px 0; text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px; }
+.rule-tag { display: inline-block; background: #0f172a; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: #94a3b8; }
+.rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; }
+.rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; }
+
+.empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 </style>
 </head>
 
@@ -693,7 +713,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
             <small>Unified Security & Topology Dashboard</small>
         </div>
     </div>
-    <div id="dataInfo" style="font-size:12px;color:#94a3b8;"></div>
+    <div id="dataInfo" style="font-size:12px;color:var(--text-secondary);"></div>
 </div>
 
 <div class="tabs-bar">
@@ -708,7 +728,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
     <div id="tab-search" class="tab-content active">
         <div class="search-panel">
             <div class="search-row">
-                <input id="query" placeholder="Search IP, CIDR, Instance ID (i-xxxx), ENI ID, Security Group..." autocomplete="off">
+                <input id="query" placeholder="Search IP, CIDR, Instance ID (i-xxxx), ENI ID, Security Group, Palo Rule..." autocomplete="off">
                 <button onclick="investigate()">Investigate</button>
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
@@ -785,7 +805,7 @@ function setSummary(s) {
         <div class="summary">
             <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
-            <div class="card"><b>${s.firewall_objects}</b><span>Firewall Objects</span></div>
+            <div class="card palo-card"><b>${s.firewall_objects}</b><span>Palo Alto Objects / Rules</span></div>
             <div class="card"><b>SQLite</b><span>Engine: FTS5</span></div>
         </div>
     `;
@@ -793,6 +813,68 @@ function setSummary(s) {
 
 function section(title, count, body) {
     return `<div class="section"><div class="section-title"><h2>${title}</h2><span class="count">${count}</span></div>${body}</div>`;
+}
+
+function renderPillList(arr, defaultLabel = 'any') {
+    if (!arr || arr.length === 0) return `<span class="rule-tag">${defaultLabel}</span>`;
+    const items = Array.isArray(arr) ? arr : [arr];
+    return items.map(i => `<span class="rule-tag">${esc(typeof i === 'object' ? (i.name || JSON.stringify(i)) : i)}</span>`).join(' ');
+}
+
+function renderPaloAltoDetails(x) {
+    const d = x.data || {};
+    const cat = (x.type || "").toLowerCase();
+    let html = "";
+
+    // 1. Palo Alto Security Rules Visualizer
+    if (cat.includes("security_rules") || cat.includes("security")) {
+        const action = d.action || "allow";
+        const actionBadge = action === "allow" 
+            ? `<span class="rule-tag allow">ALLOW</span>` 
+            : `<span class="rule-tag deny">${esc(action.toUpperCase())}</span>`;
+
+        html += `<table class="prop-table">`;
+        html += `<tr><th>Action</th><td>${actionBadge}</td></tr>`;
+        html += `<tr><th>From Zone(s)</th><td>${renderPillList(d.from || d.from_zone, 'any')}</td></tr>`;
+        html += `<tr><th>To Zone(s)</th><td>${renderPillList(d.to || d.to_zone, 'any')}</td></tr>`;
+        html += `<tr><th>Source Address</th><td>${renderPillList(d.source, 'any')}</td></tr>`;
+        html += `<tr><th>Destination Address</th><td>${renderPillList(d.destination, 'any')}</td></tr>`;
+        html += `<tr><th>Application</th><td>${renderPillList(d.application, 'any')}</td></tr>`;
+        html += `<tr><th>Service / Port</th><td>${renderPillList(d.service, 'any')}</td></tr>`;
+        if (d.description) html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
+        if (d.tag) html += `<tr><th>Tags</th><td>${renderPillList(d.tag)}</td></tr>`;
+        html += `</table>`;
+        return html;
+    }
+
+    // 2. Palo Alto Address Objects & Groups
+    if (cat.includes("address")) {
+        html += `<table class="prop-table">`;
+        if (d["ip-netmask"]) html += `<tr><th>IP / Subnet</th><td><code>${esc(d["ip-netmask"])}</code></td></tr>`;
+        if (d["ip-range"]) html += `<tr><th>IP Range</th><td><code>${esc(d["ip-range"])}</code></td></tr>`;
+        if (d.fqdn) html += `<tr><th>FQDN</th><td><code>${esc(d.fqdn)}</code></td></tr>`;
+        if (d.members) html += `<tr><th>Group Members</th><td>${renderPillList(d.members)}</td></tr>`;
+        if (d.description) html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
+        if (d.tag) html += `<tr><th>Tags</th><td>${renderPillList(d.tag)}</td></tr>`;
+        html += `</table>`;
+        return html;
+    }
+
+    // 3. Palo Alto NAT Rules
+    if (cat.includes("nat")) {
+        html += `<table class="prop-table">`;
+        html += `<tr><th>NAT Type</th><td>${esc(d["nat-type"] || "ipv4")}</td></tr>`;
+        html += `<tr><th>From Zone</th><td>${renderPillList(d.from, 'any')}</td></tr>`;
+        html += `<tr><th>To Zone</th><td>${renderPillList(d.to, 'any')}</td></tr>`;
+        html += `<tr><th>Original Source</th><td>${renderPillList(d.source, 'any')}</td></tr>`;
+        html += `<tr><th>Original Destination</th><td>${renderPillList(d.destination, 'any')}</td></tr>`;
+        if (d["translated-address"]) html += `<tr><th>Translated Address</th><td>${renderPillList(d["translated-address"])}</td></tr>`;
+        html += `</table>`;
+        return html;
+    }
+
+    // Fallback: Generic Key-Value Table
+    return renderProperties(d);
 }
 
 function renderProperties(obj) {
@@ -821,7 +903,7 @@ function renderProperties(obj) {
         if (v !== null && v !== undefined && v !== "" && typeof v !== 'object') {
             html += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
         } else if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
-            html += `<tr><th>${esc(k)}</th><td><div style="font-family:sans-serif; font-size:12px; color:#475569;"><em>Contains ${v.length} sub-item(s)</em></div></td></tr>`;
+            html += `<tr><th>${esc(k)}</th><td><div style="font-family:sans-serif; font-size:12px; color:var(--text-secondary);"><em>Contains ${v.length} sub-item(s)</em></div></td></tr>`;
         }
     }
     html += `</table>`;
@@ -830,38 +912,47 @@ function renderProperties(obj) {
 
 function itemHTML(x, badgeClass) {
     let extraDetails = "";
-    
-    if (x.type && x.type.includes('security_group') && x.data.IpPermissions) {
-        extraDetails += `<div class="sub-table-header">Inbound Rules (IpPermissions)</div>`;
-        extraDetails += `<table class="prop-table"><tr><th>Protocol</th><th>Port Range</th><th>Source (CIDRs / Groups)</th></tr>`;
-        for (const perm of (x.data.IpPermissions || [])) {
-            const proto = perm.IpProtocol === '-1' ? 'All' : (perm.IpProtocol || 'Any');
-            let portStr = 'All';
-            if (perm.FromPort !== undefined && perm.ToPort !== undefined) {
-                portStr = perm.FromPort === perm.ToPort ? `${perm.FromPort}` : `${perm.FromPort} - ${perm.ToPort}`;
-            }
-            
-            const sources = [];
-            for (const ipR of (perm.IpRanges || [])) {
-                sources.push(`<code class="rule-tag">${esc(ipR.CidrIp)}${ipR.Description ? ' (' + esc(ipR.Description) + ')' : ''}</code>`);
-            }
-            for (const pvR of (perm.UserIdGroupPairs || [])) {
-                sources.push(`<code class="rule-tag">SG: ${esc(pvR.GroupId || pvR.GroupName)}</code>`);
-            }
-            
-            extraDetails += `<tr><td>${esc(proto)}</td><td>${esc(portStr)}</td><td>${sources.join(' ') || 'Any'}</td></tr>`;
-        }
-        extraDetails += `</table>`;
-    }
 
-    if (x.type && x.type.includes('eni') && x.data.PrivateIpAddresses) {
-        extraDetails += `<div class="sub-table-header">Assigned IP Addresses</div>`;
-        extraDetails += `<table class="prop-table"><tr><th>Private IP</th><th>Primary</th><th>Association (Public IP)</th></tr>`;
-        for (const ipcfg of (x.data.PrivateIpAddresses || [])) {
-            const pubIp = ipcfg.Association ? ipcfg.Association.PublicIp : 'None';
-            extraDetails += `<tr><td><code>${esc(ipcfg.PrivateIpAddress)}</code></td><td>${esc(ipcfg.Primary)}</td><td><code>${esc(pubIp)}</code></td></tr>`;
+    // Special render for Palo Alto items
+    if (badgeClass === "palo" || badgeClass === "green") {
+        extraDetails = renderPaloAltoDetails(x);
+    } else {
+        if (x.type && x.type.includes('security_group') && x.data.IpPermissions) {
+            extraDetails += `<div class="sub-table-header">Inbound Rules (IpPermissions)</div>`;
+            extraDetails += `<table class="prop-table"><tr><th>Protocol</th><th>Port Range</th><th>Source (CIDRs / Groups)</th></tr>`;
+            for (const perm of (x.data.IpPermissions || [])) {
+                const proto = perm.IpProtocol === '-1' ? 'All' : (perm.IpProtocol || 'Any');
+                let portStr = 'All';
+                if (perm.FromPort !== undefined && perm.ToPort !== undefined) {
+                    portStr = perm.FromPort === perm.ToPort ? `${perm.FromPort}` : `${perm.FromPort} - ${perm.ToPort}`;
+                }
+                
+                const sources = [];
+                for (const ipR of (perm.IpRanges || [])) {
+                    sources.push(`<code class="rule-tag">${esc(ipR.CidrIp)}${ipR.Description ? ' (' + esc(ipR.Description) + ')' : ''}</code>`);
+                }
+                for (const pvR of (perm.UserIdGroupPairs || [])) {
+                    sources.push(`<code class="rule-tag">SG: ${esc(pvR.GroupId || pvR.GroupName)}</code>`);
+                }
+                
+                extraDetails += `<tr><td>${esc(proto)}</td><td>${esc(portStr)}</td><td>${sources.join(' ') || 'Any'}</td></tr>`;
+            }
+            extraDetails += `</table>`;
         }
-        extraDetails += `</table>`;
+
+        if (x.type && x.type.includes('eni') && x.data.PrivateIpAddresses) {
+            extraDetails += `<div class="sub-table-header">Assigned IP Addresses</div>`;
+            extraDetails += `<table class="prop-table"><tr><th>Private IP</th><th>Primary</th><th>Association (Public IP)</th></tr>`;
+            for (const ipcfg of (x.data.PrivateIpAddresses || [])) {
+                const pubIp = ipcfg.Association ? ipcfg.Association.PublicIp : 'None';
+                extraDetails += `<tr><td><code>${esc(ipcfg.PrivateIpAddress)}</code></td><td>${esc(ipcfg.Primary)}</td><td><code>${esc(pubIp)}</code></td></tr>`;
+            }
+            extraDetails += `</table>`;
+        }
+
+        if (!extraDetails) {
+            extraDetails = renderProperties(x.data);
+        }
     }
 
     return `
@@ -874,7 +965,6 @@ function itemHTML(x, badgeClass) {
                 </div>
             </div>
             <div class="meta">Source File: ${esc(x.file)}</div>
-            ${renderProperties(x.data)}
             ${extraDetails}
             <details style="margin-top: 12px;">
                 <summary>View Full Raw JSON Payload</summary>
@@ -889,7 +979,7 @@ function render(data) {
     let html = "";
     if (data.aws_matches.length) html += section("Matching AWS Resources (EC2, ENIs, RDS, etc.)", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
     if (data.attached_security_groups.length) html += section("Directly Attached Security Groups & Rules", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
-    if (data.matched_addresses.length) html += section("Firewall Address Objects & Rules", data.matched_addresses.length, data.matched_addresses.map(x => itemHTML(x, "green")).join(""));
+    if (data.matched_addresses.length) html += section("Palo Alto Firewall Objects & Rules", data.matched_addresses.length, data.matched_addresses.map(x => itemHTML(x, "palo")).join(""));
     if (data.raw_matches.length) html += section("Raw Text Matches", data.raw_matches.length, data.raw_matches.map(x => itemHTML(x, "")).join(""));
     if (!html) html = `<div class="empty">No matching records found.</div>`;
     document.getElementById("output").innerHTML = html;
@@ -915,7 +1005,7 @@ document.getElementById("query").addEventListener("keydown", e => { if (e.key ==
 async function loadInfo() {
     const r = await fetch("/api/info");
     const x = await r.json();
-    document.getElementById("dataInfo").textContent = `${x.files} indexed items &bull; ${x.devices} devices/accounts`;
+    document.getElementById("dataInfo").textContent = `${x.files} indexed items \u2022 ${x.devices} devices/accounts`;
 }
 
 async function loadOrgTopology() {
@@ -934,7 +1024,7 @@ async function loadOrgTopology() {
         const accounts = node.Accounts || node.AccountList || [];
         const subOus = node.OUs || node.Children || node.OrganizationalUnits || node.SubOUs || [];
         
-        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 <b>${esc(nodeName)}</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${accounts.length} accounts, ${subOus.length} sub-OUs)</span></summary>`;
+        let html = `<details ${openDefault ? 'open' : ''}><summary>📁 <b>${esc(nodeName)}</b> <span style="font-weight:400; color:var(--text-secondary); font-size:12px;">(${accounts.length} accounts, ${subOus.length} sub-OUs)</span></summary>`;
         
         if (accounts.length > 0) {
             html += `<div class="org-accounts">`;
@@ -942,13 +1032,13 @@ async function loadOrgTopology() {
                 const accName = acc.Name || acc.AccountName || acc.Account?.Name || "Unnamed Account";
                 const accId = acc.Id || acc.AccountId || acc.Account?.Id || "";
                 const status = acc.Status || acc.AccountStatus || "ACTIVE";
-                html += `<div class="account-badge">🖥️ <b>${esc(accName)}</b> &bull; <code>${esc(accId)}</code> <span style="color:#64748b;">[${esc(status)}]</span></div>`;
+                html += `<div class="account-badge">🖥️ <b>${esc(accName)}</b> &bull; <code>${esc(accId)}</code> <span style="color:var(--text-secondary);">[${esc(status)}]</span></div>`;
             }
             html += `</div>`;
         }
 
         if (subOus.length > 0) {
-            html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
+            html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--border-color);">`;
             for (const ou of subOus) {
                 html += renderNode(ou, false);
             }
@@ -956,7 +1046,7 @@ async function loadOrgTopology() {
         }
 
         if (accounts.length === 0 && subOus.length === 0) {
-            html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No direct accounts or sub-OUs in this level.</div>`;
+            html += `<div style="padding: 6px 14px; font-size:12px; color:var(--text-secondary); font-style:italic;">No direct accounts or sub-OUs in this level.</div>`;
         }
         
         html += `</details>`;
@@ -978,11 +1068,11 @@ async function loadPanTopology() {
     document.getElementById("panMeta").textContent = `Panorama: ${data.PanoramaName || 'Panorama'}`;
 
     let html = "";
-    html += `<details open><summary>📁 <b>Templates & Template Stacks</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${data.Templates ? data.Templates.length : 0} templates)</span></summary>`;
+    html += `<details open><summary>📁 <b>Templates & Template Stacks</b> <span style="font-weight:400; color:var(--text-secondary); font-size:12px;">(${data.Templates ? data.Templates.length : 0} templates)</span></summary>`;
     if (data.Templates && data.Templates.length > 0) {
-        html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
+        html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--border-color);">`;
         for (const tpl of data.Templates) {
-            html += `<details open><summary>🛠️ <b>${esc(tpl.Name)}</b> <span class="badge blue">${esc(tpl.Type)}</span> <span style="font-size:11px; color:#64748b;">— ${esc(tpl.Description || '')}</span></summary>`;
+            html += `<details open><summary>🛠️ <b>${esc(tpl.Name)}</b> <span class="badge blue">${esc(tpl.Type)}</span> <span style="font-size:11px; color:var(--text-secondary);">— ${esc(tpl.Description || '')}</span></summary>`;
             if (tpl.Firewalls && tpl.Firewalls.length > 0) {
                 html += `<div class="org-accounts">`;
                 for (const fw of tpl.Firewalls) {
@@ -990,7 +1080,7 @@ async function loadPanTopology() {
                 }
                 html += `</div>`;
             } else {
-                html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No firewalls bound directly to this template.</div>`;
+                html += `<div style="padding: 6px 14px; font-size:12px; color:var(--text-secondary); font-style:italic;">No firewalls bound directly to this template.</div>`;
             }
             html += `</details>`;
         }
@@ -998,11 +1088,11 @@ async function loadPanTopology() {
     }
     html += `</details>`;
 
-    html += `<details open style="margin-top: 16px;"><summary>📁 <b>Device Groups (Policy Hierarchies)</b> <span style="font-weight:400; color:#64748b; font-size:12px;">(${data.DeviceGroups ? data.DeviceGroups.length : 0} device groups)</span></summary>`;
+    html += `<details open style="margin-top: 16px;"><summary>📁 <b>Device Groups (Policy Hierarchies)</b> <span style="font-weight:400; color:var(--text-secondary); font-size:12px;">(${data.DeviceGroups ? data.DeviceGroups.length : 0} device groups)</span></summary>`;
     if (data.DeviceGroups && data.DeviceGroups.length > 0) {
-        html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid #e2e8f0;">`;
+        html += `<div style="margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--border-color);">`;
         for (const dg of data.DeviceGroups) {
-            html += `<details open><summary>🛡️ <b>${esc(dg.Name)}</b> <span class="badge" style="background:#faf5ff; color:#7e22ce;">Parent: ${esc(dg.Parent || 'shared')}</span> <span style="font-size:11px; color:#64748b;">— ${esc(dg.Description || '')}</span></summary>`;
+            html += `<details open><summary>🛡️ <b>${esc(dg.Name)}</b> <span class="badge palo">Parent: ${esc(dg.Parent || 'shared')}</span> <span style="font-size:11px; color:var(--text-secondary);">— ${esc(dg.Description || '')}</span></summary>`;
             if (dg.Firewalls && dg.Firewalls.length > 0) {
                 html += `<div class="org-accounts">`;
                 for (const fw of dg.Firewalls) {
@@ -1010,7 +1100,7 @@ async function loadPanTopology() {
                 }
                 html += `</div>`;
             } else {
-                html += `<div style="padding: 6px 14px; font-size:12px; color:#94a3b8; font-style:italic;">No firewalls assigned to this device group.</div>`;
+                html += `<div style="padding: 6px 14px; font-size:12px; color:var(--text-secondary); font-style:italic;">No firewalls assigned to this device group.</div>`;
             }
             html += `</details>`;
         }
