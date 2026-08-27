@@ -65,13 +65,14 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
 
     val = str(cidr_or_range_str).strip()
     
+    # Check IP Range format (e.g., "10.0.0.1-10.0.0.254")
     if "-" in val and "/" not in val:
         parts = val.split("-")
         if len(parts) == 2:
             try:
                 start = ipaddress.ip_address(parts[0].strip())
                 end = ipaddress.ip_address(parts[1].strip())
-                return 1 if start <= target_net.network_address <= end else 0
+                return 1 if start <= target_net.network_address <= end or start <= target_net.broadcast_address <= end else 0
             except ValueError:
                 pass
 
@@ -83,17 +84,21 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
 
 
 def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
+    """Strictly extracts Security Group IDs directly attached to ENIs or Instances."""
     sg_ids = set()
-    groups = item.get("Groups") or item.get("SecurityGroups") or item.get("groups")
+
+    # Direct top-level Security Groups
+    groups = item.get("Groups") or item.get("SecurityGroups")
     if isinstance(groups, list):
         for g in groups:
             if isinstance(g, str) and g.startswith("sg-"):
                 sg_ids.add(g)
             elif isinstance(g, dict):
                 gid = g.get("GroupId") or g.get("VpcSecurityGroupId")
-                if gid:
-                    sg_ids.add(gid)
+                if gid and str(gid).startswith("sg-"):
+                    sg_ids.add(str(gid))
 
+    # Network Interfaces attached to Instances
     nis = item.get("NetworkInterfaces")
     if isinstance(nis, list):
         for ni in nis:
@@ -105,8 +110,8 @@ def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
                             sg_ids.add(g)
                         elif isinstance(g, dict):
                             gid = g.get("GroupId") or g.get("VpcSecurityGroupId")
-                            if gid:
-                                sg_ids.add(gid)
+                            if gid and str(gid).startswith("sg-"):
+                                sg_ids.add(str(gid))
                                 
     return sg_ids
 
@@ -402,8 +407,8 @@ class InfrastructureDataSource:
             if subnet_id:
                 cursor.execute("""
                     SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE r.category LIKE '%subnet%' AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
-                """, (subnet_id, f'%"SubnetId": "{subnet_id}"%', dev_name))
+                    WHERE (r.category LIKE '%subnet%') AND (r.name = ? OR json_extract(r.data, '$.SubnetId') = ?) AND d.name = ?
+                """, (subnet_id, subnet_id, dev_name))
                 for s_row in cursor.fetchall():
                     s_data = json.loads(s_row["data"])
                     cidr = s_data.get("CidrBlock")
@@ -413,8 +418,8 @@ class InfrastructureDataSource:
             if vpc_id:
                 cursor.execute("""
                     SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE r.category LIKE '%vpc%' AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
-                """, (vpc_id, f'%"VpcId": "{vpc_id}"%', dev_name))
+                    WHERE (r.category LIKE '%vpc%') AND (r.name = ? OR json_extract(r.data, '$.VpcId') = ?) AND d.name = ?
+                """, (vpc_id, vpc_id, dev_name))
                 for v_row in cursor.fetchall():
                     v_data = json.loads(v_row["data"])
                     cidr = v_data.get("CidrBlock")
@@ -424,15 +429,15 @@ class InfrastructureDataSource:
                         if isinstance(block, dict) and block.get("CidrBlock"):
                             related_cidrs_to_match.add(block["CidrBlock"])
 
-        # 3. Resolve Payload for Attached SGs
+        # 3. Resolve Payload strictly for Attached SGs (Fixes SG count inflation)
         for dev_name, sg_id in attached_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
                 FROM records r
                 JOIN devices d ON r.device_id = d.id
-                WHERE (r.category LIKE '%security_group%' OR r.category LIKE '%sg%')
-                  AND (r.name = ? OR r.data LIKE ?) AND d.name = ?
-            """, (sg_id, f'%"GroupId": "{sg_id}"%', dev_name))
+                WHERE (r.category = 'security_groups' OR r.category = 'security_group' OR r.category LIKE '%security-group%')
+                  AND (r.name = ? OR json_extract(r.data, '$.GroupId') = ?) AND d.name = ?
+            """, (sg_id, sg_id, dev_name))
             
             for sg_row in cursor.fetchall():
                 sg_item = json.loads(sg_row["data"])
@@ -447,7 +452,7 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # 4. PAN-OS Engine (Splitting Objects vs Rules)
+        # 4. PAN-OS Engine (Recursive Group Resolution & Subnet Overlap Fix)
         matched_panos_ids = set()
         matched_object_names = set()
 
@@ -475,16 +480,22 @@ class InfrastructureDataSource:
                 output["matched_objects"].append(rec)
 
         if related_cidrs_to_match:
+            # Step A: Direct IP/Subnet Match on Address Objects
             for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
                 
-                ip_netmask = item_data.get("ip-netmask") or item_data.get("ip_netmask") or item_data.get("ip")
-                ip_range = item_data.get("ip-range") or item_data.get("ip_range")
-                check_targets = [ip_netmask, ip_range]
-                
+                # Check all common Palo Alto IP fields
+                targets = []
+                for k in ("ip-netmask", "ip_netmask", "ip-range", "ip_range", "fqdn", "value"):
+                    v = item_data.get(k)
+                    if isinstance(v, str):
+                        targets.append(v)
+                    elif isinstance(v, list):
+                        targets.extend([str(x) for x in v if isinstance(x, str)])
+
                 for cidr in related_cidrs_to_match:
-                    for target in check_targets:
+                    for target in targets:
                         if target and sqlite_ip_contains(cidr, target):
                             is_match = True
                             break
@@ -498,22 +509,31 @@ class InfrastructureDataSource:
                         matched_object_names.add(str(obj_name))
                     classify_and_append_panos(row, item_data)
 
-            if matched_object_names:
+            # Step B: Recursive Group & Rule Expansion (Resolves Object -> Group -> Rule)
+            expanded_new_names = True
+            while expanded_new_names:
+                expanded_new_names = False
                 for row in all_panos_records:
                     if row["id"] in matched_panos_ids:
                         continue
+
                     item_data = json.loads(row["data"])
                     data_str = json.dumps(item_data)
-                    
+
+                    # Check if object contains any already matched object/group names
                     for name in list(matched_object_names):
-                        if f'"{name}"' in data_str:
+                        # Match whole word to avoid partial name substring hits
+                        if re.search(r'\b' + re.escape(name) + r'\b', data_str):
                             matched_panos_ids.add(row["id"])
                             obj_name = row["name"] or item_data.get("name")
-                            if obj_name:
+                            if obj_name and str(obj_name) not in matched_object_names:
                                 matched_object_names.add(str(obj_name))
+                                expanded_new_names = True
                             classify_and_append_panos(row, item_data)
                             break
+
         else:
+            # Text/Keyword Fallback Search
             clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
             if clean_q:
                 fts_query = f'"{clean_q}"*'
@@ -859,7 +879,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 Strict attached Security Group scoping and host/subnet/VPC network matching enabled.
+                💡 Strict attached Security Group scoping and recursive Palo Group resolution enabled.
             </div>
         </div>
 
