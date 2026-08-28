@@ -236,7 +236,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
             if not path.is_file():
                 continue
             rel = path.relative_to(aws_root)
-            if len(rel.parts) < 3:
+            if len(rel.parts) < 2:
                 continue
             
             account_name = rel.parts[0]
@@ -256,7 +256,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
                     continue
                 
                 name = ""
-                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name", "Id"):
+                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name"):
                     if item.get(name_key):
                         name = str(item[name_key])
                         if "arn:aws:" in name:
