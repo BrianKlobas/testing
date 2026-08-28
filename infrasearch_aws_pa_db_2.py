@@ -222,12 +222,12 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
             for item in candidates:
                 if not isinstance(item, dict):
                     continue
-                name = item.get("name", "")
+                name = item.get("name", item.get("@name", ""))
                 if not name:
-                    for key in ("object", "rule", "profile"):
+                    for key in ("object", "rule", "profile", "entry"):
                         val = item.get(key)
-                        if isinstance(val, dict) and val.get("name"):
-                            name = str(val["name"])
+                        if isinstance(val, dict) and (val.get("name") or val.get("@name")):
+                            name = str(val.get("name") or val.get("@name"))
                             break
 
                 cursor.execute(
@@ -429,7 +429,7 @@ class InfrastructureDataSource:
                         if isinstance(block, dict) and block.get("CidrBlock"):
                             related_cidrs_to_match.add(block["CidrBlock"])
 
-        # 3. Resolve Payload strictly for Attached SGs (Fixes SG count inflation)
+        # 3. Resolve Payload strictly for Attached SGs
         for dev_name, sg_id in attached_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
@@ -485,14 +485,24 @@ class InfrastructureDataSource:
                 item_data = json.loads(row["data"])
                 is_match = False
                 
-                # Check all common Palo Alto IP fields
+                # Unwrap Palo Alto entry if wrapped
+                eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+
                 targets = []
-                for k in ("ip-netmask", "ip_netmask", "ip-range", "ip_range", "fqdn", "value"):
-                    v = item_data.get(k)
-                    if isinstance(v, str):
-                        targets.append(v)
-                    elif isinstance(v, list):
-                        targets.extend([str(x) for x in v if isinstance(x, str)])
+                if isinstance(eval_obj, dict):
+                    for k in ("ip-netmask", "ip_netmask", "ip-range", "ip_range", "fqdn", "value"):
+                        v = eval_obj.get(k)
+                        if isinstance(v, str):
+                            targets.append(v)
+                        elif isinstance(v, list):
+                            targets.extend([str(x) for x in v if isinstance(x, str)])
+                        elif isinstance(v, dict):
+                            # Handle nested member formats
+                            mem = v.get("member")
+                            if isinstance(mem, str):
+                                targets.append(mem)
+                            elif isinstance(mem, list):
+                                targets.extend([str(x) for x in mem if isinstance(x, str)])
 
                 for cidr in related_cidrs_to_match:
                     for target in targets:
@@ -504,12 +514,12 @@ class InfrastructureDataSource:
 
                 if is_match:
                     matched_panos_ids.add(row["id"])
-                    obj_name = row["name"] or item_data.get("name")
+                    obj_name = row["name"] or item_data.get("name") or (eval_obj.get("@name") if isinstance(eval_obj, dict) else "")
                     if obj_name:
                         matched_object_names.add(str(obj_name))
                     classify_and_append_panos(row, item_data)
 
-            # Step B: Recursive Group & Rule Expansion (Resolves Object -> Group -> Rule)
+            # Step B: Recursive Group & Rule Expansion
             expanded_new_names = True
             while expanded_new_names:
                 expanded_new_names = False
@@ -520,12 +530,11 @@ class InfrastructureDataSource:
                     item_data = json.loads(row["data"])
                     data_str = json.dumps(item_data)
 
-                    # Check if object contains any already matched object/group names
                     for name in list(matched_object_names):
-                        # Match whole word to avoid partial name substring hits
                         if re.search(r'\b' + re.escape(name) + r'\b', data_str):
                             matched_panos_ids.add(row["id"])
-                            obj_name = row["name"] or item_data.get("name")
+                            eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+                            obj_name = row["name"] or (eval_obj.get("@name") if isinstance(eval_obj, dict) else "")
                             if obj_name and str(obj_name) not in matched_object_names:
                                 matched_object_names.add(str(obj_name))
                                 expanded_new_names = True
@@ -533,7 +542,6 @@ class InfrastructureDataSource:
                             break
 
         else:
-            # Text/Keyword Fallback Search
             clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
             if clean_q:
                 fts_query = f'"{clean_q}"*'
@@ -800,12 +808,14 @@ details { margin-top: 10px; }
 summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
 .prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: var(--bg-card); border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color); }
-.prop-table th { background: #182238; color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 28%; }
+.prop-table th { background: #182238; color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
 .prop-table td { padding: 8px 12px; border-bottom: 1px solid #26334d; color: var(--text-primary); font-family: monospace; word-break: break-all; }
 .prop-table tr:last-child td { border-bottom: none; }
+
 .rule-tag { display: inline-block; background: #0f172a; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: #94a3b8; }
-.rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; }
-.rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; }
+.rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; font-weight: bold; }
+.rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; font-weight: bold; }
+.rule-tag.highlight { background: #1e3a8a; color: #bfdbfe; border-color: #3b82f6; }
 
 .link-grid {
     display: grid;
@@ -879,7 +889,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 Strict attached Security Group scoping and recursive Palo Group resolution enabled.
+                💡 Full Palo Alto object, group, & security rule detail parser enabled.
             </div>
         </div>
 
@@ -1059,48 +1069,91 @@ function section(title, count, body) {
     return `<div class="section"><div class="section-title"><h2>${title}</h2><span class="count">${count}</span></div>${body}</div>`;
 }
 
-function renderPillList(arr, defaultLabel = 'any') {
-    if (!arr || (Array.isArray(arr) && arr.length === 0)) return `<span class="rule-tag">${defaultLabel}</span>`;
-    const items = Array.isArray(arr) ? arr : [arr];
-    return items.map(i => `<span class="rule-tag">${esc(typeof i === 'object' ? (i.name || JSON.stringify(i)) : i)}</span>`).join(' ');
+// Helper to reliably extract nested PAN-OS member/value arrays
+function parsePanosField(val) {
+    if (!val) return [];
+    if (typeof val === 'string') return [val];
+    if (Array.isArray(val)) {
+        return val.map(v => typeof v === 'object' ? (v.name || v['@name'] || JSON.stringify(v)) : v);
+    }
+    if (typeof val === 'object') {
+        if (val.member) {
+            return parsePanosField(val.member);
+        }
+        if (val['#text']) return [val['#text']];
+        if (val.name || val['@name']) return [val.name || val['@name']];
+    }
+    return [String(val)];
+}
+
+function renderPillList(val, defaultLabel = 'any') {
+    const items = parsePanosField(val);
+    if (!items || items.length === 0) {
+        return `<span class="rule-tag">${esc(defaultLabel)}</span>`;
+    }
+    return items.map(i => `<span class="rule-tag highlight">${esc(i)}</span>`).join(' ');
 }
 
 function renderPaloAltoDetails(x) {
-    const d = x.data || {};
+    const raw = x.data || {};
+    // Extract nested entry if present
+    const d = raw.entry || raw;
     const cat = (x.type || "").toLowerCase();
     let html = "";
 
-    if (cat.includes("security_rules") || cat.includes("security") || cat.includes("nat")) {
+    // Security & NAT Rules
+    if (cat.includes("security_rules") || cat.includes("security") || cat.includes("nat") || cat.includes("policy") || d.action || d.from || d.to) {
         const action = d.action || "allow";
-        const actionBadge = action === "allow" 
+        const actionBadge = (String(action).toLowerCase() === "allow") 
             ? `<span class="rule-tag allow">ALLOW</span>` 
-            : `<span class="rule-tag deny">${esc(action.toUpperCase())}</span>`;
+            : `<span class="rule-tag deny">${esc(String(action).toUpperCase())}</span>`;
 
         html += `<table class="prop-table">`;
-        html += `<tr><th>Action</th><td>${actionBadge}</td></tr>`;
-        html += `<tr><th>From Zone(s)</th><td>${renderPillList(d.from || d.from_zone, 'any')}</td></tr>`;
-        html += `<tr><th>To Zone(s)</th><td>${renderPillList(d.to || d.to_zone, 'any')}</td></tr>`;
+        html += `<tr><th>Rule Action</th><td>${actionBadge}</td></tr>`;
+        html += `<tr><th>From Zone(s)</th><td>${renderPillList(d.from || d['from-zone'], 'any')}</td></tr>`;
+        html += `<tr><th>To Zone(s)</th><td>${renderPillList(d.to || d['to-zone'], 'any')}</td></tr>`;
         html += `<tr><th>Source Address</th><td>${renderPillList(d.source, 'any')}</td></tr>`;
         html += `<tr><th>Destination Address</th><td>${renderPillList(d.destination, 'any')}</td></tr>`;
         html += `<tr><th>Application</th><td>${renderPillList(d.application, 'any')}</td></tr>`;
         html += `<tr><th>Service / Port</th><td>${renderPillList(d.service, 'any')}</td></tr>`;
-        if (d.description) html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
+        
+        if (d['url-category'] || d.category) {
+            html += `<tr><th>URL Category</th><td>${renderPillList(d['url-category'] || d.category, 'any')}</td></tr>`;
+        }
+        if (d.log_setting || d['log-setting']) {
+            html += `<tr><th>Log Profile</th><td><code>${esc(d.log_setting || d['log-setting'])}</code></td></tr>`;
+        }
+        if (d.description) {
+            html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
+        }
         html += `</table>`;
         return html;
     }
 
-    if (cat.includes("address")) {
-        html += `<table class="prop-table">`;
-        if (d["ip-netmask"]) html += `<tr><th>IP / Subnet</th><td><code>${esc(d["ip-netmask"])}</code></td></tr>`;
-        if (d["ip-range"]) html += `<tr><th>IP Range</th><td><code>${esc(d["ip-range"])}</code></td></tr>`;
-        if (d.fqdn) html += `<tr><th>FQDN</th><td><code>${esc(d.fqdn)}</code></td></tr>`;
-        if (d.members || d.static) html += `<tr><th>Group Members</th><td>${renderPillList(d.members || d.static)}</td></tr>`;
-        if (d.description) html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
-        html += `</table>`;
-        return html;
-    }
+    // Address Objects & Address Groups
+    html += `<table class="prop-table">`;
+    const ipNetmask = d['ip-netmask'] || d.ip_netmask;
+    const ipRange = d['ip-range'] || d.ip_range;
+    const fqdn = d.fqdn;
+    const members = d.static || d.members || d.member || (d.group ? d.group.static || d.group.member : null);
 
-    return renderProperties(d);
+    if (ipNetmask) html += `<tr><th>IP / Subnet</th><td><code>${esc(typeof ipNetmask === 'object' ? JSON.stringify(ipNetmask) : ipNetmask)}</code></td></tr>`;
+    if (ipRange) html += `<tr><th>IP Range</th><td><code>${esc(typeof ipRange === 'object' ? JSON.stringify(ipRange) : ipRange)}</code></td></tr>`;
+    if (fqdn) html += `<tr><th>FQDN</th><td><code>${esc(fqdn)}</code></td></tr>`;
+    if (members) html += `<tr><th>Group Members</th><td>${renderPillList(members)}</td></tr>`;
+    if (d.description) html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
+    
+    // Fallback if no specific PAN address fields matched
+    if (!ipNetmask && !ipRange && !fqdn && !members) {
+        for (const [k, v] of Object.entries(d)) {
+            if (k !== 'name' && k !== '@name' && typeof v !== 'object') {
+                html += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
+            }
+        }
+    }
+    
+    html += `</table>`;
+    return html;
 }
 
 function renderProperties(obj) {
@@ -1116,6 +1169,10 @@ function renderProperties(obj) {
 }
 
 function itemHTML(x, badgeClass) {
+    const rawData = x.data || {};
+    const evalData = rawData.entry || rawData;
+    const displayName = x.name || evalData.name || evalData['@name'] || "Unnamed Record";
+    
     let extraDetails = (badgeClass === "palo" || badgeClass === "green") 
         ? renderPaloAltoDetails(x) 
         : renderProperties(x.data);
@@ -1123,7 +1180,7 @@ function itemHTML(x, badgeClass) {
     return `
         <div class="item">
             <div class="item-head">
-                <div class="item-name">${esc(x.name)}</div>
+                <div class="item-name">${esc(displayName)}</div>
                 <div>
                     <span class="badge blue">${esc(x.device)}</span>
                     <span class="badge ${badgeClass}">${esc(x.type)}</span>
