@@ -469,11 +469,15 @@ class InfrastructureDataSource:
             if "all_entries" in filename or "all_entries" in cat:
                 output["all_entries_matches"].append(rec)
             elif "rule" in cat or "policy" in cat or "nat" in cat:
-                output["matched_rules"].append(rec)
+                if not any(r["name"] == rec["name"] and r["device"] == rec["device"] for r in output["matched_rules"]):
+                    output["matched_rules"].append(rec)
             else:
-                output["matched_objects"].append(rec)
+                if not any(o["name"] == rec["name"] and o["device"] == rec["device"] for o in output["matched_objects"]):
+                    output["matched_objects"].append(rec)
 
-        if related_cidrs_to_match:
+        if query_network or related_cidrs_to_match:
+            active_cidrs = related_cidrs_to_match if related_cidrs_to_match else {query_network.compressed}
+            
             for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
@@ -487,14 +491,8 @@ class InfrastructureDataSource:
                             targets.append(v)
                         elif isinstance(v, list):
                             targets.extend([str(x) for x in v if isinstance(x, str)])
-                        elif isinstance(v, dict):
-                            mem = v.get("member")
-                            if isinstance(mem, str):
-                                targets.append(mem)
-                            elif isinstance(mem, list):
-                                targets.extend([str(x) for x in mem if isinstance(x, str)])
 
-                for cidr in related_cidrs_to_match:
+                for cidr in active_cidrs:
                     for target in targets:
                         if target and sqlite_ip_contains(cidr, target):
                             is_match = True
@@ -504,32 +502,55 @@ class InfrastructureDataSource:
 
                 if is_match:
                     matched_panos_ids.add(row["id"])
-                    obj_name = row["name"] or item_data.get("name") or (eval_obj.get("@name") if isinstance(eval_obj, dict) else "")
+                    obj_name = row["name"] or eval_obj.get("@name") or ""
                     if obj_name:
                         matched_object_names.add(str(obj_name))
                     classify_and_append_panos(row, item_data)
 
-            expanded_new_names = True
-            while expanded_new_names:
-                expanded_new_names = False
+            all_resolved_references = set(matched_object_names)
+            expanded = True
+            while expanded:
+                expanded = False
                 for row in all_panos_records:
                     if row["id"] in matched_panos_ids:
                         continue
-
                     item_data = json.loads(row["data"])
-                    data_str = json.dumps(item_data)
+                    eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+                    
+                    members = []
+                    for k in ("static", "members", "member"):
+                        v = eval_obj.get(k)
+                        if isinstance(v, str):
+                            members.append(v)
+                        elif isinstance(v, list):
+                            members.extend([str(x) for x in v if isinstance(x, str)])
+                        elif isinstance(v, dict):
+                            mem = v.get("member")
+                            if isinstance(mem, str):
+                                members.append(mem)
+                            elif isinstance(mem, list):
+                                members.extend([str(x) for x in mem if isinstance(x, str)])
+                    
+                    if any(m in all_resolved_references for m in members):
+                        matched_panos_ids.add(row["id"])
+                        g_name = row["name"] or eval_obj.get("@name") or ""
+                        if g_name and g_name not in all_resolved_references:
+                            all_resolved_references.add(g_name)
+                            expanded = True
+                        classify_and_append_panos(row, item_data)
 
-                    for name in list(matched_object_names):
-                        if re.search(r'\b' + re.escape(name) + r'\b', data_str):
-                            matched_panos_ids.add(row["id"])
-                            eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
-                            obj_name = row["name"] or (eval_obj.get("@name") if isinstance(eval_obj, dict) else "")
-                            if obj_name and str(obj_name) not in matched_object_names:
-                                matched_object_names.add(str(obj_name))
-                                expanded_new_names = True
-                            classify_and_append_panos(row, item_data)
-                            break
-
+            for row in all_panos_records:
+                item_data = json.loads(row["data"])
+                eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+                cat = str(row["category"]).lower()
+                
+                if "rule" in cat or "policy" in cat or "nat" in cat:
+                    rule_sources = [str(x) for x in extractValues(findKeyRecursively(eval_obj, ['source']))]
+                    rule_dests = [str(x) for x in extractValues(findKeyRecursively(eval_obj, ['destination', 'dest']))]
+                    
+                    if any(ref in all_resolved_references for ref in rule_sources + rule_dests):
+                        matched_panos_ids.add(row["id"])
+                        classify_and_append_panos(row, item_data)
         else:
             clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
             if clean_q:
