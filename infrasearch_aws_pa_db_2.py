@@ -65,7 +65,6 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
 
     val = str(cidr_or_range_str).strip()
     
-    # Check IP Range format (e.g., "10.0.0.1-10.0.0.254")
     if "-" in val and "/" not in val:
         parts = val.split("-")
         if len(parts) == 2:
@@ -84,10 +83,7 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
 
 
 def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
-    """Strictly extracts Security Group IDs directly attached to ENIs or Instances."""
     sg_ids = set()
-
-    # Direct top-level Security Groups
     groups = item.get("Groups") or item.get("SecurityGroups")
     if isinstance(groups, list):
         for g in groups:
@@ -98,7 +94,6 @@ def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
                 if gid and str(gid).startswith("sg-"):
                     sg_ids.add(str(gid))
 
-    # Network Interfaces attached to Instances
     nis = item.get("NetworkInterfaces")
     if isinstance(nis, list):
         for ni in nis:
@@ -278,10 +273,6 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
     conn.close()
 
 
-# ----------------------------------------------------------------------
-# Search Engine
-# ----------------------------------------------------------------------
-
 class InfrastructureDataSource:
     def __init__(self, db_file: Path | None = None):
         self._db_file = db_file
@@ -347,7 +338,6 @@ class InfrastructureDataSource:
         if query_network:
             related_cidrs_to_match.add(query_network.compressed)
 
-        # 1. AWS Initial Lookup
         pending_aws_lookups = []
         if query_network:
             target_ip = str(query_network.network_address)
@@ -383,7 +373,6 @@ class InfrastructureDataSource:
                         matched_aws_record_ids.add(row["id"])
                         pending_aws_lookups.append(row)
 
-        # 2. Extract Attached Security Groups strictly & Harvest Subnet/VPC CIDRs
         for row in pending_aws_lookups:
             item = json.loads(row["data"])
 
@@ -429,7 +418,6 @@ class InfrastructureDataSource:
                         if isinstance(block, dict) and block.get("CidrBlock"):
                             related_cidrs_to_match.add(block["CidrBlock"])
 
-        # 3. Resolve Payload strictly for Attached SGs
         for dev_name, sg_id in attached_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
@@ -452,7 +440,6 @@ class InfrastructureDataSource:
                         "data": sg_item
                     })
 
-        # 4. PAN-OS Engine (Recursive Group Resolution & Subnet Overlap Fix)
         matched_panos_ids = set()
         matched_object_names = set()
 
@@ -480,12 +467,9 @@ class InfrastructureDataSource:
                 output["matched_objects"].append(rec)
 
         if related_cidrs_to_match:
-            # Step A: Direct IP/Subnet Match on Address Objects
             for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
-                
-                # Unwrap Palo Alto entry if wrapped
                 eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
 
                 targets = []
@@ -497,7 +481,6 @@ class InfrastructureDataSource:
                         elif isinstance(v, list):
                             targets.extend([str(x) for x in v if isinstance(x, str)])
                         elif isinstance(v, dict):
-                            # Handle nested member formats
                             mem = v.get("member")
                             if isinstance(mem, str):
                                 targets.append(mem)
@@ -519,7 +502,6 @@ class InfrastructureDataSource:
                         matched_object_names.add(str(obj_name))
                     classify_and_append_panos(row, item_data)
 
-            # Step B: Recursive Group & Rule Expansion
             expanded_new_names = True
             while expanded_new_names:
                 expanded_new_names = False
@@ -608,7 +590,6 @@ body {
     min-height: 100vh;
 }
 
-/* Sidebar Layout */
 .sidebar {
     width: var(--sidebar-width);
     background: var(--bg-surface);
@@ -668,7 +649,6 @@ body {
     color: var(--text-secondary);
 }
 
-/* Main Content Wrapper */
 .main-wrapper {
     margin-left: var(--sidebar-width);
     flex: 1;
@@ -853,7 +833,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 <body>
 
-<!-- Left Sidebar Navigation -->
 <div class="sidebar">
     <div class="brand">
         <div class="logo">II</div>
@@ -877,10 +856,8 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
     </div>
 </div>
 
-<!-- Main Area -->
 <div class="main-wrapper">
 
-    <!-- TAB 1: Search -->
     <div id="tab-search" class="tab-content active">
         <div class="search-panel">
             <div class="search-row">
@@ -899,7 +876,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
-    <!-- TAB 2: AWS Org Topology -->
     <div id="tab-org" class="tab-content">
         <div class="section">
             <div class="section-title">
@@ -912,7 +888,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
-    <!-- TAB 3: Panorama Topology -->
     <div id="tab-pan" class="tab-content">
         <div class="section">
             <div class="section-title">
@@ -925,7 +900,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
-    <!-- TAB 4: Automation Results -->
     <div id="tab-automation" class="tab-content">
         <div class="section">
             <div class="section-title">
@@ -978,7 +952,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
-    <!-- TAB 5: Useful Links & Info -->
     <div id="tab-info" class="tab-content">
         <div class="section">
             <div class="section-title">
@@ -1020,7 +993,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
-    <!-- TAB 6: Stats -->
     <div id="tab-stats" class="tab-content">
         <div class="stats-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 16px;">
             <div class="card">
@@ -1069,86 +1041,131 @@ function section(title, count, body) {
     return `<div class="section"><div class="section-title"><h2>${title}</h2><span class="count">${count}</span></div>${body}</div>`;
 }
 
-// Helper to reliably extract nested PAN-OS member/value arrays
-function parsePanosField(val) {
-    if (!val) return [];
-    if (typeof val === 'string') return [val];
-    if (Array.isArray(val)) {
-        return val.map(v => typeof v === 'object' ? (v.name || v['@name'] || JSON.stringify(v)) : v);
+// Deep unwrapper for PAN-OS nested XML elements
+function extractValues(obj) {
+    if (obj === null || obj === undefined) return [];
+    if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') {
+        return [String(obj)];
     }
-    if (typeof val === 'object') {
-        if (val.member) {
-            return parsePanosField(val.member);
+    if (Array.isArray(obj)) {
+        return obj.flatMap(item => extractValues(item));
+    }
+    if (typeof obj === 'object') {
+        let results = [];
+        if (obj.member !== undefined) results.push(...extractValues(obj.member));
+        if (obj.entry !== undefined) results.push(...extractValues(obj.entry));
+        if (obj['#text'] !== undefined) results.push(String(obj['#text']));
+        if (obj.name !== undefined && typeof obj.name === 'string') results.push(obj.name);
+        if (obj['@name'] !== undefined) results.push(String(obj['@name']));
+        
+        if (results.length > 0) return results;
+
+        // Fallback: extract string values from direct dictionary keys
+        for (const [k, v] of Object.entries(obj)) {
+            if (!k.startsWith('@')) {
+                results.push(...extractValues(v));
+            }
         }
-        if (val['#text']) return [val['#text']];
-        if (val.name || val['@name']) return [val.name || val['@name']];
+        return results;
     }
-    return [String(val)];
+    return [];
 }
 
 function renderPillList(val, defaultLabel = 'any') {
-    const items = parsePanosField(val);
+    const items = extractValues(val);
     if (!items || items.length === 0) {
         return `<span class="rule-tag">${esc(defaultLabel)}</span>`;
     }
     return items.map(i => `<span class="rule-tag highlight">${esc(i)}</span>`).join(' ');
 }
 
+// Deep search helper for specific key targets across objects
+function findKeyRecursively(obj, keys) {
+    if (!obj || typeof obj !== 'object') return undefined;
+    for (const k of keys) {
+        if (obj[k] !== undefined) return obj[k];
+    }
+    for (const key in obj) {
+        if (typeof obj[key] === 'object') {
+            const found = findKeyRecursively(obj[key], keys);
+            if (found !== undefined) return found;
+        }
+    }
+    return undefined;
+}
+
 function renderPaloAltoDetails(x) {
     const raw = x.data || {};
-    // Extract nested entry if present
     const d = raw.entry || raw;
     const cat = (x.type || "").toLowerCase();
-    let html = "";
 
-    // Security & NAT Rules
-    if (cat.includes("security_rules") || cat.includes("security") || cat.includes("nat") || cat.includes("policy") || d.action || d.from || d.to) {
-        const action = d.action || "allow";
+    // 1. SECURITY & NAT RULES DISPLAY
+    if (cat.includes("rule") || cat.includes("policy") || cat.includes("nat") || d.action || d.from || d.to) {
+        const action = findKeyRecursively(d, ['action']) || 'allow';
         const actionBadge = (String(action).toLowerCase() === "allow") 
             ? `<span class="rule-tag allow">ALLOW</span>` 
             : `<span class="rule-tag deny">${esc(String(action).toUpperCase())}</span>`;
 
-        html += `<table class="prop-table">`;
+        const fromVal = findKeyRecursively(d, ['from', 'from-zone']);
+        const toVal = findKeyRecursively(d, ['to', 'to-zone']);
+        const srcVal = findKeyRecursively(d, ['source']);
+        const dstVal = findKeyRecursively(d, ['destination', 'dest']);
+        const appVal = findKeyRecursively(d, ['application', 'app']);
+        const svcVal = findKeyRecursively(d, ['service', 'port']);
+        const urlVal = findKeyRecursively(d, ['url-category', 'category']);
+        const descVal = findKeyRecursively(d, ['description']);
+
+        let html = `<table class="prop-table">`;
         html += `<tr><th>Rule Action</th><td>${actionBadge}</td></tr>`;
-        html += `<tr><th>From Zone(s)</th><td>${renderPillList(d.from || d['from-zone'], 'any')}</td></tr>`;
-        html += `<tr><th>To Zone(s)</th><td>${renderPillList(d.to || d['to-zone'], 'any')}</td></tr>`;
-        html += `<tr><th>Source Address</th><td>${renderPillList(d.source, 'any')}</td></tr>`;
-        html += `<tr><th>Destination Address</th><td>${renderPillList(d.destination, 'any')}</td></tr>`;
-        html += `<tr><th>Application</th><td>${renderPillList(d.application, 'any')}</td></tr>`;
-        html += `<tr><th>Service / Port</th><td>${renderPillList(d.service, 'any')}</td></tr>`;
-        
-        if (d['url-category'] || d.category) {
-            html += `<tr><th>URL Category</th><td>${renderPillList(d['url-category'] || d.category, 'any')}</td></tr>`;
-        }
-        if (d.log_setting || d['log-setting']) {
-            html += `<tr><th>Log Profile</th><td><code>${esc(d.log_setting || d['log-setting'])}</code></td></tr>`;
-        }
-        if (d.description) {
-            html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
-        }
+        html += `<tr><th>From Zone(s)</th><td>${renderPillList(fromVal, 'any')}</td></tr>`;
+        html += `<tr><th>To Zone(s)</th><td>${renderPillList(toVal, 'any')}</td></tr>`;
+        html += `<tr><th>Source Address</th><td>${renderPillList(srcVal, 'any')}</td></tr>`;
+        html += `<tr><th>Destination Address</th><td>${renderPillList(dstVal, 'any')}</td></tr>`;
+        html += `<tr><th>Application</th><td>${renderPillList(appVal, 'any')}</td></tr>`;
+        html += `<tr><th>Service / Port</th><td>${renderPillList(svcVal, 'any')}</td></tr>`;
+        if (urlVal) html += `<tr><th>URL Category</th><td>${renderPillList(urlVal, 'any')}</td></tr>`;
+        if (descVal) html += `<tr><th>Description</th><td>${esc(extractValues(descVal).join(" "))}</td></tr>`;
         html += `</table>`;
         return html;
     }
 
-    // Address Objects & Address Groups
-    html += `<table class="prop-table">`;
-    const ipNetmask = d['ip-netmask'] || d.ip_netmask;
-    const ipRange = d['ip-range'] || d.ip_range;
-    const fqdn = d.fqdn;
-    const members = d.static || d.members || d.member || (d.group ? d.group.static || d.group.member : null);
-
-    if (ipNetmask) html += `<tr><th>IP / Subnet</th><td><code>${esc(typeof ipNetmask === 'object' ? JSON.stringify(ipNetmask) : ipNetmask)}</code></td></tr>`;
-    if (ipRange) html += `<tr><th>IP Range</th><td><code>${esc(typeof ipRange === 'object' ? JSON.stringify(ipRange) : ipRange)}</code></td></tr>`;
-    if (fqdn) html += `<tr><th>FQDN</th><td><code>${esc(fqdn)}</code></td></tr>`;
-    if (members) html += `<tr><th>Group Members</th><td>${renderPillList(members)}</td></tr>`;
-    if (d.description) html += `<tr><th>Description</th><td>${esc(d.description)}</td></tr>`;
+    // 2. OBJECTS & OBJECT GROUPS DISPLAY (Name, Description, Members / Values)
+    const nameVal = x.name || findKeyRecursively(d, ['name', '@name']) || 'Unnamed Object';
+    const descVal = findKeyRecursively(d, ['description']);
     
-    // Fallback if no specific PAN address fields matched
-    if (!ipNetmask && !ipRange && !fqdn && !members) {
-        for (const [k, v] of Object.entries(d)) {
-            if (k !== 'name' && k !== '@name' && typeof v !== 'object') {
-                html += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
-            }
+    // Check all possible object / group value containers
+    const ipNetmask = findKeyRecursively(d, ['ip-netmask', 'ip_netmask']);
+    const ipRange = findKeyRecursively(d, ['ip-range', 'ip_range']);
+    const fqdn = findKeyRecursively(d, ['fqdn']);
+    const members = findKeyRecursively(d, ['static', 'members', 'member', 'group']);
+
+    let html = `<table class="prop-table">`;
+    html += `<tr><th>Object Name</th><td><b>${esc(nameVal)}</b></td></tr>`;
+    
+    if (descVal) {
+        html += `<tr><th>Description</th><td>${esc(extractValues(descVal).join(" "))}</td></tr>`;
+    } else {
+        html += `<tr><th>Description</th><td><i style="color:var(--text-secondary)">None</i></td></tr>`;
+    }
+
+    if (members) {
+        html += `<tr><th>Group Members</th><td>${renderPillList(members, 'None')}</td></tr>`;
+    }
+    if (ipNetmask) {
+        html += `<tr><th>IP / Subnet</th><td>${renderPillList(ipNetmask)}</td></tr>`;
+    }
+    if (ipRange) {
+        html += `<tr><th>IP Range</th><td>${renderPillList(ipRange)}</td></tr>`;
+    }
+    if (fqdn) {
+        html += `<tr><th>FQDN</th><td>${renderPillList(fqdn)}</td></tr>`;
+    }
+
+    // Fallback if no known member/value fields were extracted
+    if (!members && !ipNetmask && !ipRange && !fqdn) {
+        const genericVals = extractValues(d).filter(v => v !== nameVal);
+        if (genericVals.length > 0) {
+            html += `<tr><th>Value(s)</th><td>${genericVals.map(v => `<span class="rule-tag highlight">${esc(v)}</span>`).join(' ')}</td></tr>`;
         }
     }
     
