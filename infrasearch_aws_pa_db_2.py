@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usrbin/env python3
 """
-Infrastructure Intelligence GUI (Left-Sidebar Unified Dashboard)
+PerDef Security Orchestrator (Left-Sidebar Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
   1. Search & Investigation
@@ -9,6 +9,7 @@ Tabs:
   4. Automation Results & Collection Status
   5. Information & Useful Links
   6. Data Collection Metrics & Analytics
+  7. About & System Info (Bottom Sidebar)
 
 Run:
     python infra_intel.py --firewall-data ./parsed --aws-data ./aws_parsed --org-file org_topology.json --pan-file panorama_topology.json --db infra_intel.db
@@ -569,20 +570,19 @@ HTML = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Infrastructure Intelligence — Dashboard</title>
+<title>PerDef Security Orchestrator</title>
 <style>
 :root {
-    --bg-main: #090d16;
-    --bg-surface: #0f172a;
-    --bg-card: #1e293b;
-    --border-color: #334155;
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --accent: #3b82f6;
-    --accent-hover: #2563eb;
-    --palo-orange: #ff6b00;
-    --code-bg: #090d16;
-    --sidebar-width: 260px;
+    --bg-main: #2b2c32;
+    --bg-surface: #3b3c43;
+    --bg-card: #2e2f35;
+    --border-color: #fbc600;
+    --text-primary: #e0eae8;
+    --text-secondary: #94969a;
+    --accent: #fbc600;
+    --accent-hover: #d4a700;
+    --code-bg: #1e1f23;
+    --sidebar-width: 270px;
 }
 
 * { box-sizing: border-box; }
@@ -599,7 +599,7 @@ body {
 .sidebar {
     width: var(--sidebar-width);
     background: var(--bg-surface);
-    border-right: 1px solid var(--border-color);
+    border-right: 2px solid var(--border-color);
     display: flex;
     flex-direction: column;
     position: fixed;
@@ -608,17 +608,17 @@ body {
 }
 
 .brand {
-    padding: 20px;
+    padding: 18px;
     display: flex;
     gap: 12px;
     align-items: center;
     border-bottom: 1px solid var(--border-color);
 }
 .logo {
-    width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #1d4ed8);
-    display: grid; place-items: center; font-weight: bold; font-size: 15px; color: white;
+    width: 38px; height: 38px; border-radius: 8px; background: var(--bg-main); border: 1.5px solid var(--border-color);
+    display: grid; place-items: center; color: var(--accent);
 }
-.brand h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.5px; }
+.brand h1 { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: 0.5px; color: var(--text-primary); }
 .brand small { color: var(--text-secondary); font-size: 11px; }
 
 .nav-menu {
@@ -633,11 +633,11 @@ body {
     background: transparent;
     color: var(--text-secondary);
     border: none;
-    padding: 12px 14px;
-    font-size: 13.5px;
+    padding: 11px 14px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    border-radius: 8px;
+    border-radius: 6px;
     text-align: left;
     transition: all 0.2s;
     display: flex;
@@ -645,14 +645,17 @@ body {
     gap: 10px;
 }
 
-.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
-.tab-btn.active { color: #ffffff; background: var(--accent); }
+.tab-btn:hover { color: var(--text-primary); background: rgba(251, 198, 0, 0.1); }
+.tab-btn.active { color: #3b3c43; background: var(--accent); font-weight: 700; }
 
 .sidebar-footer {
-    padding: 16px;
+    padding: 12px;
     border-top: 1px solid var(--border-color);
     font-size: 11px;
     color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .main-wrapper {
@@ -666,23 +669,22 @@ body {
 .tab-content.active { display: block; }
 
 .beta-banner {
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid #d97706;
-    color: #fef3c7;
-    padding: 10px 16px;
+    background: rgba(251, 198, 0, 0.12);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 12px 16px;
     border-radius: 8px;
     font-size: 13px;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }
 
 .search-panel {
     background: var(--bg-surface);
-    border-radius: 12px;
+    border-radius: 10px;
     padding: 20px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
     border: 1px solid var(--border-color);
 }
 
@@ -690,21 +692,21 @@ body {
 .search-row input { flex: 1; min-width: 320px; }
 
 input, button {
-    height: 44px;
+    height: 42px;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 0 14px;
     font-size: 14px;
     outline: none;
     background: var(--bg-main);
     color: var(--text-primary);
 }
-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25); }
-button { background: var(--accent); color: white; border: 0; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(251, 198, 0, 0.2); }
+button { background: var(--accent); color: #3b3c43; border: 0; font-weight: 700; cursor: pointer; transition: background 0.2s; }
 button:hover { background: var(--accent-hover); }
-button.secondary { background: #334155; color: var(--text-primary); }
+button.secondary { background: #2b2c32; color: var(--text-primary); border: 1px solid var(--border-color); }
 
-.hint { color: var(--text-secondary); font-size: 13px; margin-top: 10px; }
+.hint { color: var(--text-secondary); font-size: 12.5px; margin-top: 10px; }
 
 .summary {
     display: grid;
@@ -716,11 +718,10 @@ button.secondary { background: #334155; color: var(--text-primary); }
 .card {
     background: var(--bg-surface);
     padding: 16px;
-    border-radius: 10px;
+    border-radius: 8px;
     border: 1px solid var(--border-color);
 }
 .card b { display: block; font-size: 24px; color: var(--accent); font-weight: 700; }
-.card.palo-card b { color: var(--palo-orange); }
 .card span { color: var(--text-secondary); font-size: 11px; margin-top: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }
 
 .status-grid {
@@ -733,7 +734,7 @@ button.secondary { background: #334155; color: var(--text-primary); }
 .status-card {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 18px;
 }
 
@@ -744,7 +745,7 @@ button.secondary { background: #334155; color: var(--text-primary); }
     margin-bottom: 12px;
 }
 
-.status-title { font-weight: 700; font-size: 15px; }
+.status-title { font-weight: 700; font-size: 15px; color: var(--text-primary); }
 .status-pill {
     padding: 3px 8px;
     border-radius: 12px;
@@ -756,7 +757,7 @@ button.secondary { background: #334155; color: var(--text-primary); }
 
 .section {
     background: var(--bg-surface);
-    border-radius: 10px;
+    border-radius: 8px;
     margin-bottom: 20px;
     border: 1px solid var(--border-color);
     overflow: hidden;
@@ -768,12 +769,12 @@ button.secondary { background: #334155; color: var(--text-primary); }
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #141e33;
+    background: #33343a;
 }
-.section-title h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--text-primary); }
-.count { background: #1e293b; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border: 1px solid var(--border-color); }
+.section-title h2 { font-size: 14px; margin: 0; font-weight: 700; color: var(--text-primary); }
+.count { background: var(--bg-main); border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
-.item { border-bottom: 1px solid var(--border-color); padding: 18px; }
+.item { border-bottom: 1px solid rgba(251, 198, 0, 0.3); padding: 18px; }
 .item:last-child { border-bottom: 0; }
 
 .item-head {
@@ -787,35 +788,31 @@ button.secondary { background: #334155; color: var(--text-primary); }
 
 .badge {
     display: inline-block;
-    background: #334155;
-    color: #cbd5e1;
+    background: var(--bg-main);
+    color: var(--text-primary);
     border-radius: 6px;
     padding: 3px 8px;
     margin-left: 6px;
     font-size: 11px;
     font-weight: 600;
+    border: 1px solid var(--border-color);
 }
-.badge.blue { background: #1e3a8a; color: #93c5fd; border: 1px solid #1d4ed8; }
-.badge.aws { background: #451a03; color: #fdba74; border: 1px solid #c2410c; }
-.badge.sg { background: #3b0764; color: #d8b4fe; border: 1px solid #7e22ce; }
-.badge.palo { background: rgba(255, 107, 0, 0.15); color: #ff9d5c; border: 1px solid var(--palo-orange); }
 
 .meta { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
-pre { background: var(--code-bg); color: #e2e8f0; border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
+pre { background: var(--code-bg); color: var(--text-primary); border-radius: 6px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
 details { margin-top: 10px; }
 summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
 .prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: var(--bg-card); border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color); }
-.prop-table th { background: #182238; color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
-.prop-table td { padding: 8px 12px; border-bottom: 1px solid #26334d; color: var(--text-primary); font-family: monospace; word-break: break-all; }
+.prop-table th { background: #25262a; color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
+.prop-table td { padding: 8px 12px; border-bottom: 1px solid #3d3e46; color: var(--text-primary); font-family: monospace; word-break: break-all; }
 .prop-table tr:last-child td { border-bottom: none; }
 
-.rule-tag { display: inline-block; background: #0f172a; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: #94a3b8; }
-.rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; font-weight: bold; }
-.rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; font-weight: bold; }
-.rule-tag.highlight { background: #1e3a8a; color: #bfdbfe; border-color: #3b82f6; }
+.rule-tag { display: inline-block; background: var(--bg-main); padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: var(--text-primary); }
+.rule-tag.allow { background: rgba(16, 185, 129, 0.2); color: #a7f3d0; border-color: #059669; font-weight: bold; }
+.rule-tag.deny { background: rgba(239, 68, 68, 0.2); color: #fecaca; border-color: #dc2626; font-weight: bold; }
+.rule-tag.highlight { background: rgba(251, 198, 0, 0.15); color: var(--accent); border-color: var(--accent); }
 
-/* 2-Column Info Page Layout */
 .info-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -838,38 +835,40 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 .link-card {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 16px;
     margin-bottom: 14px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
 }
 .link-card h4 { margin: 0 0 6px 0; color: var(--text-primary); font-size: 14px; }
 .link-card p { margin: 0 0 10px 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.4; }
-.link-card a {
-    color: var(--accent);
-    text-decoration: none;
-    font-size: 12.5px;
-    font-weight: 600;
-}
+.link-card a { color: var(--accent); text-decoration: none; font-size: 12.5px; font-weight: 600; }
 .link-card a:hover { text-decoration: underline; }
-
-.sub-links {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-top: 6px;
-    padding-top: 8px;
-    border-top: 1px dashed var(--border-color);
-}
 
 .org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
 .tree-node { margin-left: 20px; padding: 4px 0; }
-.tree-folder { color: #60a5fa; font-weight: bold; }
-.tree-leaf { color: #cbd5e1; margin: 2px 0; }
-.switch-link { color: #60a5fa; text-decoration: none; font-weight: 600; }
-.switch-link:hover { text-decoration: underline; color: #93c5fd; }
+.tree-folder { color: var(--accent); font-weight: bold; }
+.tree-leaf { color: var(--text-primary); margin: 2px 0; }
+.switch-link { color: var(--accent); text-decoration: none; font-weight: 600; }
+.switch-link:hover { text-decoration: underline; }
+
+.about-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 24px;
+    max-width: 700px;
+}
+
+.about-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(251, 198, 0, 0.2);
+    font-size: 14px;
+}
+.about-row:last-child { border-bottom: 0; }
+.about-label { color: var(--text-secondary); font-weight: 600; }
+.about-val { color: var(--text-primary); font-weight: 700; }
 
 .empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 </style>
@@ -879,9 +878,14 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 <div class="sidebar">
     <div class="brand">
-        <div class="logo">II</div>
+        <div class="logo">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+        </div>
         <div>
-            <h1>Infra Intel</h1>
+            <h1>PerDef Security Orchestrator</h1>
             <small>Unified Security Dashboard</small>
         </div>
     </div>
@@ -896,7 +900,8 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
     </div>
 
     <div class="sidebar-footer">
-        <div id="dataInfo">Loading database status...</div>
+        <button class="tab-btn" style="width: 100%; border: 1px solid var(--border-color);" onclick="switchTab('about', this)">🛡️ About & System Info</button>
+        <div id="dataInfo" style="margin-top: 6px; text-align: center;">Loading database status...</div>
     </div>
 </div>
 
@@ -1012,107 +1017,36 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
             </div>
             <div style="padding: 20px;">
                 <div class="info-grid">
-                    <!-- Column 1: Systems & Tools -->
                     <div>
                         <div class="link-column-title">🛠️ System & Tool Portals</div>
-
                         <div class="link-card">
                             <h4>Splunk Enterprise Log Management</h4>
                             <p>Centralized SIEM log search, firewall traffic analysis, and SOC alerts.</p>
                             <a href="#" onclick="alert('Configure internal Splunk URL in script.'); return false;">Open Splunk &rarr;</a>
                         </div>
-
                         <div class="link-card">
                             <h4>AWS Management Console</h4>
                             <p>Direct SSO portal access for cloud tenant administration and EC2 management.</p>
                             <a href="https://aws.amazon.com/console/" target="_blank">Open AWS Console &rarr;</a>
                         </div>
-
                         <div class="link-card">
                             <h4>Palo Alto Panorama Portal</h4>
                             <p>Centralized firewall policy manager, security profile configuration, and rule inspection.</p>
                             <a href="#" onclick="alert('Configure Panorama URL in script.'); return false;">Open Panorama &rarr;</a>
                         </div>
-
-                        <div class="link-card">
-                            <h4>Microsoft Azure Portal</h4>
-                            <p>Cloud tenant administration, VNets, and Enterprise application management.</p>
-                            <a href="https://portal.azure.com" target="_blank">Open Azure Portal &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>Infoblox IPAM & Grid Manager</h4>
-                            <p>Enterprise IP Address Management, DNS zone administrative panel, and DHCP scopes.</p>
-                            <a href="#" onclick="alert('Configure Infoblox URL in script.'); return false;">Open Infoblox &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>Wiz Cloud Security Platform</h4>
-                            <p>Cloud Security Posture Management (CSPM), vulnerability management, and risk graphs.</p>
-                            <a href="#" onclick="alert('Configure Wiz URL in script.'); return false;">Open Wiz &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>AlgoSec Firewall Analyzer</h4>
-                            <p>Automated security policy analysis, change management, and firewall rule cleanup.</p>
-                            <a href="#" onclick="alert('Configure AlgoSec URL in script.'); return false;">Open AlgoSec &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>Akamai Control Center</h4>
-                            <p>Edge Security, Web Application Firewall (WAF) rule tuning, and CDN management.</p>
-                            <a href="https://control.akamai.com" target="_blank">Open Akamai Portal &rarr;</a>
-                        </div>
                     </div>
 
-                    <!-- Column 2: General & Information -->
                     <div>
                         <div class="link-column-title">📚 General & Information Links</div>
-
                         <div class="link-card">
                             <h4>ServiceNow Portal</h4>
                             <p>Enterprise IT Service Management for submitting security requests and incidents.</p>
-                            <div class="sub-links">
-                                <a href="#" onclick="alert('Configure FW Request URL'); return false;">🔥 Firewall Request</a>
-                                <a href="#" onclick="alert('Configure Proxy Request URL'); return false;">🌐 Proxy Request</a>
-                                <a href="#" onclick="alert('Configure Security Tab URL'); return false;">🛡️ Security Tab</a>
-                            </div>
+                            <a href="#" onclick="alert('Configure ServiceNow link.'); return false;">Open ServiceNow &rarr;</a>
                         </div>
-
                         <div class="link-card">
                             <h4>Security Standards & Compliance</h4>
                             <p>Corporate baseline security policies, hardening standards, and governance rules.</p>
                             <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Security Standards &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>Network Documentation</h4>
-                            <p>High-level architectural diagrams, VLAN mapping tables, and routing policies.</p>
-                            <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Network Docs &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>On-Premise Network Diagrams</h4>
-                            <p>Data center topologies, core distribution layer Visio maps, and edge WAN layouts.</p>
-                            <a href="#" onclick="alert('Configure diagram link in script.'); return false;">View On-Prem Diagrams &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>AWS Architecture Diagrams</h4>
-                            <p>Transit Gateway layouts, VPC peering maps, and cross-account network designs.</p>
-                            <a href="#" onclick="alert('Configure AWS diagram link in script.'); return false;">View AWS Diagrams &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>Azure Architecture Diagrams</h4>
-                            <p>Hub-and-Spoke topology diagrams, Azure ExpressRoute connections, and Virtual WAN maps.</p>
-                            <a href="#" onclick="alert('Configure Azure diagram link in script.'); return false;">View Azure Diagrams &rarr;</a>
-                        </div>
-
-                        <div class="link-card">
-                            <h4>Run Books & Operational Procedures</h4>
-                            <p>Step-by-step procedures for standard infrastructure operations, failovers, and emergency changes.</p>
-                            <a href="#" onclick="alert('Configure Runbooks link in script.'); return false;">View Run Books &rarr;</a>
                         </div>
                     </div>
                 </div>
@@ -1127,8 +1061,40 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                 <div id="awsStats"><div class="empty">Loading stats...</div></div>
             </div>
             <div class="card">
-                <h3 style="margin-top:0; color:var(--palo-orange);">🛡️ PAN-OS Firewall Inventory</h3>
+                <h3 style="margin-top:0; color:var(--accent);">🛡️ PAN-OS Firewall Inventory</h3>
                 <div id="panosStats"><div class="empty">Loading stats...</div></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-about" class="tab-content">
+        <div class="beta-banner">
+            ⚠️ <b>Early Beta Notice:</b> PerDef Security Orchestrator is in early preview. Always verify findings before performing active remediation.
+        </div>
+
+        <div class="about-card">
+            <h2 style="margin-top:0; color:var(--accent); font-size:20px;">PerDef Security Orchestrator</h2>
+            <p style="color:var(--text-secondary); font-size:13.5px; line-height:1.5;">
+                Unified cloud and network security investigation platform providing centralized visibility across multi-cloud environments, firewall rulebases, and Route53 DNS infrastructure.
+            </p>
+
+            <div style="margin-top:20px;">
+                <div class="about-row">
+                    <span class="about-label">Application Name</span>
+                    <span class="about-val">PerDef Security Orchestrator</span>
+                </div>
+                <div class="about-row">
+                    <span class="about-label">Software Version</span>
+                    <span class="about-val">v0.1 (beta)</span>
+                </div>
+                <div class="about-row">
+                    <span class="about-label">Platform Owner</span>
+                    <span class="about-val">PerDef Team</span>
+                </div>
+                <div class="about-row">
+                    <span class="about-label">Environment</span>
+                    <span class="about-val">Development Preview</span>
+                </div>
             </div>
         </div>
     </div>
@@ -1161,9 +1127,9 @@ function setSummary(s) {
         <div class="summary">
             <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
-            <div class="card palo-card"><b>${s.palo_objects}</b><span>Palo Alto Objects & Groups</span></div>
-            <div class="card palo-card"><b>${s.palo_rules}</b><span>Palo Alto Security & NAT Rules</span></div>
-            <div class="card" style="border-color:#475569;"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
+            <div class="card"><b>${s.palo_objects}</b><span>Palo Alto Objects & Groups</span></div>
+            <div class="card"><b>${s.palo_rules}</b><span>Palo Alto Security & NAT Rules</span></div>
+            <div class="card" style="border-color:var(--border-color);"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
         </div>
     `;
 }
@@ -1267,7 +1233,7 @@ function renderRoute53Details(data, query) {
 
         html += `<tr>`;
         html += `<td><b>${esc(rName)}</b></td>`;
-        html += `<td><span class="badge blue">${esc(rType)}</span></td>`;
+        html += `<td><span class="badge">${esc(rType)}</span></td>`;
         html += `<td>${esc(rTTL)}</td>`;
         html += `<td>${formattedValues}</td>`;
         html += `</tr>`;
@@ -1294,8 +1260,6 @@ function renderPaloAltoDetails(x) {
         const dstVal = findKeyRecursively(d, ['destination', 'dest']);
         const appVal = findKeyRecursively(d, ['application', 'app']);
         const svcVal = findKeyRecursively(d, ['service', 'port']);
-        const urlVal = findKeyRecursively(d, ['url-category', 'category']);
-        const descVal = findKeyRecursively(d, ['description']);
 
         let html = `<table class="prop-table">`;
         html += `<tr><th>Rule Action</th><td>${actionBadge}</td></tr>`;
@@ -1305,41 +1269,18 @@ function renderPaloAltoDetails(x) {
         html += `<tr><th>Destination Address</th><td>${renderPillList(dstVal, 'any')}</td></tr>`;
         html += `<tr><th>Application</th><td>${renderPillList(appVal, 'any')}</td></tr>`;
         html += `<tr><th>Service / Port</th><td>${renderPillList(svcVal, 'any')}</td></tr>`;
-        if (urlVal) html += `<tr><th>URL Category</th><td>${renderPillList(urlVal, 'any')}</td></tr>`;
-        if (descVal) html += `<tr><th>Description</th><td>${esc(extractValues(descVal).join(" "))}</td></tr>`;
         html += `</table>`;
         return html;
     }
 
     const nameVal = x.name || findKeyRecursively(d, ['name', '@name']) || 'Unnamed Object';
-    const descVal = findKeyRecursively(d, ['description']);
-    
     const ipNetmask = findKeyRecursively(d, ['ip-netmask', 'ip_netmask']);
-    const ipRange = findKeyRecursively(d, ['ip-range', 'ip_range']);
-    const fqdn = findKeyRecursively(d, ['fqdn']);
     const members = findKeyRecursively(d, ['static', 'members', 'member', 'group']);
 
     let html = `<table class="prop-table">`;
     html += `<tr><th>Object Name</th><td><b>${esc(nameVal)}</b></td></tr>`;
-    
-    if (descVal) {
-        html += `<tr><th>Description</th><td>${esc(extractValues(descVal).join(" "))}</td></tr>`;
-    } else {
-        html += `<tr><th>Description</th><td><i style="color:var(--text-secondary)">None</i></td></tr>`;
-    }
-
     if (members) html += `<tr><th>Group Members</th><td>${renderPillList(members, 'None')}</td></tr>`;
     if (ipNetmask) html += `<tr><th>IP / Subnet</th><td>${renderPillList(ipNetmask)}</td></tr>`;
-    if (ipRange) html += `<tr><th>IP Range</th><td>${renderPillList(ipRange)}</td></tr>`;
-    if (fqdn) html += `<tr><th>FQDN</th><td>${renderPillList(fqdn)}</td></tr>`;
-
-    if (!members && !ipNetmask && !ipRange && !fqdn) {
-        const genericVals = extractValues(d).filter(v => v !== nameVal);
-        if (genericVals.length > 0) {
-            html += `<tr><th>Value(s)</th><td>${genericVals.map(v => `<span class="rule-tag highlight">${esc(v)}</span>`).join(' ')}</td></tr>`;
-        }
-    }
-    
     html += `</table>`;
     return html;
 }
@@ -1376,8 +1317,8 @@ function itemHTML(x, badgeClass) {
             <div class="item-head">
                 <div class="item-name">${esc(displayName)}</div>
                 <div>
-                    <span class="badge blue">${esc(x.device)}</span>
-                    <span class="badge ${badgeClass}">${esc(x.type)}</span>
+                    <span class="badge">${esc(x.device)}</span>
+                    <span class="badge">${esc(x.type)}</span>
                 </div>
             </div>
             <div class="meta">Source File: ${esc(x.file)}</div>
@@ -1403,7 +1344,7 @@ function render(data) {
         html += `
             <div class="section" style="border-style: dashed;">
                 <details>
-                    <summary style="padding: 16px; font-size: 14px; background: #141e33;">
+                    <summary style="padding: 16px; font-size: 14px; background: var(--bg-surface);">
                         📄 Parsed Full Collections (all_entries.json Files) — <b>${data.all_entries_matches.length} items hidden</b>
                     </summary>
                     <div>
@@ -1620,7 +1561,7 @@ def api_investigate():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Left-Sidebar Infrastructure Intelligence Dashboard")
+    parser = argparse.ArgumentParser(description="PerDef Security Orchestrator")
     parser.add_argument("--firewall-data", default="./parsed", help="Path to parsed Firewall JSON folder")
     parser.add_argument("--aws-data", default="./aws_parsed", help="Path to parsed AWS JSON folder")
     parser.add_argument("--org-file", default="org_topology.json", help="Path to AWS Org topology JSON file")
