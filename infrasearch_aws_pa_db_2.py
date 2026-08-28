@@ -145,9 +145,7 @@ def get_db(db_file: Path | None = None):
 def init_db(db_file: Path | None = None):
     if db_file is None:
         db_file = DB_PATH
-    if db_file.exists():
-        db_file.unlink()
-        
+
     conn = get_db(db_file)
     cursor = conn.cursor()
 
@@ -172,7 +170,7 @@ def init_db(db_file: Path | None = None):
             name, data, content='records', content_rowid='id'
         );
 
-        CREATE TRIGGER records_ai AFTER INSERT ON records BEGIN
+        CREATE TRIGGER IF NOT EXISTS records_ai AFTER INSERT ON records BEGIN
             INSERT INTO records_fts(rowid, name, data) VALUES (new.id, new.name, new.data);
         END;
     """)
@@ -183,6 +181,7 @@ def init_db(db_file: Path | None = None):
 def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
     if db_file is None:
         db_file = DB_PATH
+        
     init_db(db_file)
     conn = get_db(db_file)
     cursor = conn.cursor()
@@ -203,7 +202,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
             if not path.is_file():
                 continue
             rel = path.relative_to(fw_root)
-            device = rel.parts[0] if len(rel.parts) > 1 else "(root)"
+            device = rel.parts[0] if len(rel.parts) > 1 else "Panorama"
             file_type = path.stem
 
             try:
@@ -236,10 +235,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
             if not path.is_file():
                 continue
             rel = path.relative_to(aws_root)
-            if len(rel.parts) < 2:
-                continue
-            
-            account_name = rel.parts[0]
+            account_name = rel.parts[0] if len(rel.parts) > 1 else "Global-AWS"
             service_type = path.stem
 
             try:
@@ -1016,7 +1012,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
             </div>
             <div style="padding: 20px;">
                 <div class="info-grid">
-                    <!-- Column 1: Systems & Tools -->
                     <div>
                         <div class="link-column-title">🛠️ System & Tool Portals</div>
 
@@ -1069,7 +1064,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                         </div>
                     </div>
 
-                    <!-- Column 2: General & Information -->
                     <div>
                         <div class="link-column-title">📚 General & Information Links</div>
 
