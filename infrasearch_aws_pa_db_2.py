@@ -1355,6 +1355,83 @@ function renderRoute53Details(data, query) {
     return html;
 }
 
+function renderSecurityGroupDetails(data) {
+    const raw = data || {};
+    const ipPermissions = raw.IpPermissions || [];
+    const ipPermissionsEgress = raw.IpPermissionsEgress || [];
+    const sgName = raw.GroupName || raw.GroupId || "Security Group";
+    const description = raw.Description || "No description provided.";
+
+    let html = `<div style="margin-top: 10px;">`;
+    html += `<b style="font-size:13px; color: var(--accent);">Security Group Details:</b>`;
+    html += `<div class="meta" style="margin-bottom: 8px;"><b>Description:</b> ${esc(description)}</div>`;
+
+    // Helper to render rule blocks
+    function renderRulesTable(title, rules, isEgress) {
+        let tHtml = `<div style="margin-top: 8px; font-weight: bold; font-size: 12px; color: var(--text-primary);">${title}</div>`;
+        tHtml += `<table class="prop-table" style="margin-top:4px;">`;
+        tHtml += `<tr><th>Protocol / Ports</th><th>Source / Destination Targets</th></tr>`;
+
+        if (!rules || rules.length === 0) {
+            tHtml += `<tr><td colspan="2"><i style="color:var(--text-secondary)">No rules defined</i></td></tr>`;
+        } else {
+            for (const rule of rules) {
+                let proto = rule.IpProtocol === "-1" ? "All Protocols" : (rule.IpProtocol ? rule.IpProtocol.toUpperCase() : "Any");
+                let fromPort = rule.FromPort;
+                let toPort = rule.ToPort;
+                
+                let portDisplay = proto;
+                if (rule.IpProtocol !== "-1" && fromPort !== undefined && toPort !== undefined) {
+                    if (fromPort === toPort) {
+                        portDisplay = `${proto} : ${fromPort}`;
+                    } else {
+                        portDisplay = `${proto} : ${fromPort} - ${toPort}`;
+                    }
+                }
+
+                let targetEntries = [];
+                const targetKey = isEgress ? (rule.IpRanges || rule.Ipv6Ranges || rule.UserIdGroupPairs || rule.PrefixListIds) : (rule.IpRanges || rule.Ipv6Ranges || rule.UserIdGroupPairs || rule.PrefixListIds);
+                
+                // Collect IP ranges
+                if (Array.isArray(rule.IpRanges)) {
+                    rule.IpRanges.forEach(r => targetEntries.push(r.CidrIp + (r.Description ? ` (${r.Description})` : '')));
+                }
+                if (Array.isArray(rule.Ipv6Ranges)) {
+                    rule.Ipv6Ranges.forEach(r => targetEntries.push(r.CidrIpv6 + (r.Description ? ` (${r.Description})` : '')));
+                }
+                // Collect Security Group references / targets
+                if (Array.isArray(rule.UserIdGroupPairs)) {
+                    rule.UserIdGroupPairs.forEach(g => targetEntries.push((g.GroupId || g.GroupName) + (g.Description ? ` (${g.Description})` : '')));
+                }
+                // Collect Prefix list IDs
+                if (Array.isArray(rule.PrefixListIds)) {
+                    rule.PrefixListIds.forEach(p => targetEntries.push(p.PrefixListId));
+                }
+
+                if (targetEntries.length === 0 && rule.IpProtocol === "-1") {
+                    targetEntries.push("0.0.0.0/0 (Any)");
+                }
+
+                const formattedTargets = targetEntries.length > 0
+                    ? targetEntries.map(v => `<span class="rule-tag highlight">${esc(v)}</span>`).join(" ")
+                    : `<i style="color:var(--text-secondary)">None</i>`;
+
+                tHtml += `<tr>`;
+                tHtml += `<td><span class="badge blue">${esc(portDisplay)}</span></td>`;
+                tHtml += `<td>${formattedTargets}</td>`;
+                tHtml += `</tr>`;
+            }
+        }
+        tHtml += `</table>`;
+        return tHtml;
+    }
+
+    html += renderRulesTable("📥 Inbound Rules (IpPermissions)", ipPermissions, false);
+    html += renderRulesTable("📤 Outbound Rules (IpPermissionsEgress)", ipPermissionsEgress, true);
+    html += `</div>`;
+    return html;
+}
+
 function renderPaloAltoDetails(x) {
     const raw = x.data || {};
     const d = raw.entry || raw;
@@ -1443,6 +1520,8 @@ function itemHTML(x, badgeClass) {
     let extraDetails = "";
     if (badgeClass === "palo") {
         extraDetails = renderPaloAltoDetails(x);
+    } else if (categoryLower.includes("security_group") || categoryLower.includes("security-group") || rawData.IpPermissions !== undefined) {
+        extraDetails = renderSecurityGroupDetails(rawData);
     } else if (categoryLower.includes("route53") || categoryLower.includes("r53") || categoryLower.includes("hostedzone") || rawData.ResourceRecordSets) {
         extraDetails = renderRoute53Details(rawData, currentSearchQuery);
     } else {
