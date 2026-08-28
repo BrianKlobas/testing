@@ -629,7 +629,6 @@ body {
 .nav-menu {
     display: flex;
     flex-direction: column;
-    gap: 4px;
     padding: 16px 12px;
     flex: 1;
 }
@@ -909,7 +908,9 @@ summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600
         <button class="tab-btn" onclick="switchTab('automation', this)">⚙️ Automation Results</button>
         <button class="tab-btn" onclick="switchTab('info', this)">ℹ️ Information & Links</button>
         <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
-        <button class="tab-btn" onclick="switchTab('about', this)">ℹ️ About / Site Info</button>
+        
+        <!-- Pushed to the bottom of the sidebar list -->
+        <button class="tab-btn" onclick="switchTab('about', this)" style="margin-top: auto;">ℹ️ About / Site Info</button>
     </div>
 
     <div class="sidebar-footer">
