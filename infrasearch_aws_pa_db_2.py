@@ -396,10 +396,46 @@ class InfrastructureDataSource:
             subnet_id = item.get("SubnetId")
             vpc_id = item.get("VpcId")
 
+            # 1. Directly check if the matched item itself has a CidrBlock (e.g. if it's a subnet or vpc record)
+            item_cidr = item.get("CidrBlock")
+            if item_cidr:
+                related_cidrs_to_match.add(item_cidr)
+
+            # 2. Look up Subnets in the same account/device and add their CIDRs if they contain our target IP
+            cursor.execute("""
+                SELECT data FROM records r JOIN devices d ON r.device_id = d.id
+                WHERE (r.category LIKE '%subnet%') AND d.name = ?
+            """, (dev_name,))
+            for s_row in cursor.fetchall():
+                s_data = json.loads(s_row["data"])
+                s_cidr = s_data.get("CidrBlock")
+                if s_cidr and query_network:
+                    s_net = extract_ip_or_cidr(s_cidr)
+                    if s_net and query_network.subnet_of(s_net):
+                        related_cidrs_to_match.add(s_cidr)
+
+            # 3. Look up VPCs in the same account/device and add their CIDRs/associations if they contain our target IP
+            cursor.execute("""
+                SELECT data FROM records r JOIN devices d ON r.device_id = d.id
+                WHERE (r.category LIKE '%vpc%') AND d.name = ?
+            """, (dev_name,))
+            for v_row in cursor.fetchall():
+                v_data = json.loads(v_row["data"])
+                v_cidr = v_data.get("CidrBlock")
+                if v_cidr and query_network:
+                    v_net = extract_ip_or_cidr(v_cidr)
+                    if v_net and query_network.subnet_of(v_net):
+                        related_cidrs_to_match.add(v_cidr)
+                for block in v_data.get("CidrBlockAssociationSet", []):
+                    if isinstance(block, dict) and block.get("CidrBlock") and query_network:
+                        b_net = extract_ip_or_cidr(block["CidrBlock"])
+                        if b_net and query_network.subnet_of(b_net):
+                            related_cidrs_to_match.add(block["CidrBlock"])
+
             if subnet_id:
                 cursor.execute("""
                     SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE (r.category LIKE '%subnet%') AND (r.name = ? OR json_extract(r.data, '$.SubnetId') = ?) AND d.name = ?
+                    WHERE (r.category LIKE '%subnet%') AND (r.name = ? OR json_encrypt(r.data, '$.SubnetId') = ?) AND d.name = ?
                 """, (subnet_id, subnet_id, dev_name))
                 for s_row in cursor.fetchall():
                     s_data = json.loads(s_row["data"])
