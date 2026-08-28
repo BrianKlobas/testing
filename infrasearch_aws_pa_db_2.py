@@ -979,6 +979,11 @@ summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600
                 <h2>AWS Organization Hierarchy</h2>
                 <span id="orgMeta" class="count">Ready</span>
             </div>
+            <!-- Added clean top link bar -->
+            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border-color); background: #2f3036; display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 13px; color: var(--text-secondary);">Quick Access:</span>
+                <a href="https://aws.amazon.com/console/" target="_blank" class="switch-link" style="font-size: 13px;">🔗 Open Main AWS Console Login &rarr;</a>
+            </div>
             <div style="padding: 16px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-surface); display: flex; align-items: center; gap: 12px;">
                 <label for="crossRoleInput" style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Cross-Account Role Name:</label>
                 <input id="crossRoleInput" type="text" placeholder="e.g. OrganizationAccountAccessRole or SecurityAdmin" style="height: 36px; width: 320px;" oninput="renderOrgTreeWithRole()">
@@ -995,6 +1000,11 @@ summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600
             <div class="section-title">
                 <h2>Panorama Templates & Device Groups Hierarchy</h2>
                 <span id="panMeta" class="count">Ready</span>
+            </div>
+            <!-- Added clean top link bar -->
+            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border-color); background: #2f3036; display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 13px; color: var(--text-secondary);">Quick Access:</span>
+                <a href="#" onclick="alert('Configure Panorama URL in script or replace this href with your direct Panorama URL.'); return false;" class="switch-link" style="font-size: 13px;">🔗 Open Panorama Login &rarr;</a>
             </div>
             <div style="padding: 20px;" id="panTreeView" class="org-tree">
                 <div class="empty">Loading panorama topology...</div>
