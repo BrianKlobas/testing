@@ -9,7 +9,6 @@ Tabs:
   4. Automation Results & Collection Status
   5. Information & Useful Links
   6. Data Collection Metrics & Analytics
-  7. About & Site Info
 
 Run:
     python infra_intel.py --firewall-data ./parsed --aws-data ./aws_parsed --org-file org_topology.json --pan-file panorama_topology.json --db infra_intel.db
@@ -145,7 +144,9 @@ def get_db(db_file: Path | None = None):
 def init_db(db_file: Path | None = None):
     if db_file is None:
         db_file = DB_PATH
-
+    if db_file.exists():
+        db_file.unlink()
+        
     conn = get_db(db_file)
     cursor = conn.cursor()
 
@@ -170,7 +171,7 @@ def init_db(db_file: Path | None = None):
             name, data, content='records', content_rowid='id'
         );
 
-        CREATE TRIGGER IF NOT EXISTS records_ai AFTER INSERT ON records BEGIN
+        CREATE TRIGGER records_ai AFTER INSERT ON records BEGIN
             INSERT INTO records_fts(rowid, name, data) VALUES (new.id, new.name, new.data);
         END;
     """)
@@ -181,7 +182,6 @@ def init_db(db_file: Path | None = None):
 def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
     if db_file is None:
         db_file = DB_PATH
-        
     init_db(db_file)
     conn = get_db(db_file)
     cursor = conn.cursor()
@@ -202,7 +202,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
             if not path.is_file():
                 continue
             rel = path.relative_to(fw_root)
-            device = rel.parts[0] if len(rel.parts) > 1 else "Panorama"
+            device = rel.parts[0] if len(rel.parts) > 1 else "(root)"
             file_type = path.stem
 
             try:
@@ -235,7 +235,10 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
             if not path.is_file():
                 continue
             rel = path.relative_to(aws_root)
-            account_name = rel.parts[0] if len(rel.parts) > 1 else "Global-AWS"
+            if len(rel.parts) < 3:
+                continue
+            
+            account_name = rel.parts[0]
             service_type = path.stem
 
             try:
@@ -252,7 +255,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
                     continue
                 
                 name = ""
-                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name"):
+                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name", "Id"):
                     if item.get(name_key):
                         name = str(item[name_key])
                         if "arn:aws:" in name:
@@ -566,19 +569,19 @@ HTML = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PerDef Security Orchestrator — Dashboard</title>
+<title>Infrastructure Intelligence — Dashboard</title>
 <style>
 :root {
-    --bg-main: #3b3c43;
-    --bg-surface: #3b3c43;
-    --bg-card: #3b3c43;
-    --border-color: #fbc600;
-    --text-primary: #e0eae8;
-    --text-secondary: #94969a;
-    --accent: #fbc600;
-    --accent-hover: #e0eae8;
-    --palo-orange: #fbc600;
-    --code-bg: #3b3c43;
+    --bg-main: #090d16;
+    --bg-surface: #0f172a;
+    --bg-card: #1e293b;
+    --border-color: #334155;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --palo-orange: #ff6b00;
+    --code-bg: #090d16;
     --sidebar-width: 260px;
 }
 
@@ -612,9 +615,8 @@ body {
     border-bottom: 1px solid var(--border-color);
 }
 .logo {
-    width: 36px; height: 36px; border-radius: 8px; background: transparent;
-    border: 1px solid var(--border-color);
-    display: grid; place-items: center; font-weight: bold; font-size: 18px; color: var(--accent);
+    width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #1d4ed8);
+    display: grid; place-items: center; font-weight: bold; font-size: 15px; color: white;
 }
 .brand h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.5px; }
 .brand small { color: var(--text-secondary); font-size: 11px; }
@@ -630,7 +632,7 @@ body {
 .tab-btn {
     background: transparent;
     color: var(--text-secondary);
-    border: 1px solid transparent;
+    border: none;
     padding: 12px 14px;
     font-size: 13.5px;
     font-weight: 600;
@@ -643,8 +645,8 @@ body {
     gap: 10px;
 }
 
-.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); border-color: var(--border-color); }
-.tab-btn.active { color: #3b3c43; background: var(--accent); border-color: var(--border-color); }
+.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+.tab-btn.active { color: #ffffff; background: var(--accent); }
 
 .sidebar-footer {
     padding: 16px;
@@ -664,9 +666,9 @@ body {
 .tab-content.active { display: block; }
 
 .beta-banner {
-    background: rgba(251, 198, 0, 0.12);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid #d97706;
+    color: #fef3c7;
     padding: 10px 16px;
     border-radius: 8px;
     font-size: 13px;
@@ -697,10 +699,10 @@ input, button {
     background: var(--bg-main);
     color: var(--text-primary);
 }
-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(251, 198, 0, 0.25); }
-button { background: var(--accent); color: #3b3c43; border: 1px solid var(--border-color); font-weight: 600; cursor: pointer; transition: background 0.2s; }
+input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25); }
+button { background: var(--accent); color: white; border: 0; font-weight: 600; cursor: pointer; transition: background 0.2s; }
 button:hover { background: var(--accent-hover); }
-button.secondary { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
+button.secondary { background: #334155; color: var(--text-primary); }
 
 .hint { color: var(--text-secondary); font-size: 13px; margin-top: 10px; }
 
@@ -750,7 +752,7 @@ button.secondary { background: var(--bg-main); color: var(--text-primary); borde
     font-weight: 700;
     text-transform: uppercase;
 }
-.status-pill.success { background: rgba(251, 198, 0, 0.15); color: var(--accent); border: 1px solid var(--border-color); }
+.status-pill.success { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #059669; }
 
 .section {
     background: var(--bg-surface);
@@ -766,10 +768,10 @@ button.secondary { background: var(--bg-main); color: var(--text-primary); borde
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: var(--bg-main);
+    background: #141e33;
 }
 .section-title h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--text-primary); }
-.count { background: var(--bg-surface); border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border: 1px solid var(--border-color); }
+.count { background: #1e293b; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
 .item { border-bottom: 1px solid var(--border-color); padding: 18px; }
 .item:last-child { border-bottom: 0; }
@@ -781,38 +783,37 @@ button.secondary { background: var(--bg-main); color: var(--text-primary); borde
     flex-wrap: wrap;
     align-items: center;
 }
-.item-name { font-weight: 700; font-size: 15px; color: var(--text-primary); }
+.item-name { font-weight: 700; font-size: 15px; color: #ffffff; }
 
 .badge {
     display: inline-block;
-    background: var(--bg-main);
-    color: var(--text-primary);
+    background: #334155;
+    color: #cbd5e1;
     border-radius: 6px;
     padding: 3px 8px;
     margin-left: 6px;
     font-size: 11px;
     font-weight: 600;
-    border: 1px solid var(--border-color);
 }
-.badge.blue { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
-.badge.aws { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
-.badge.sg { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
-.badge.palo { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
+.badge.blue { background: #1e3a8a; color: #93c5fd; border: 1px solid #1d4ed8; }
+.badge.aws { background: #451a03; color: #fdba74; border: 1px solid #c2410c; }
+.badge.sg { background: #3b0764; color: #d8b4fe; border: 1px solid #7e22ce; }
+.badge.palo { background: rgba(255, 107, 0, 0.15); color: #ff9d5c; border: 1px solid var(--palo-orange); }
 
 .meta { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
-pre { background: var(--code-bg); color: var(--text-primary); border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
+pre { background: var(--code-bg); color: #e2e8f0; border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
 details { margin-top: 10px; }
 summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
 .prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: var(--bg-card); border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color); }
-.prop-table th { background: var(--bg-main); color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
-.prop-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); font-family: monospace; word-break: break-all; }
+.prop-table th { background: #182238; color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
+.prop-table td { padding: 8px 12px; border-bottom: 1px solid #26334d; color: var(--text-primary); font-family: monospace; word-break: break-all; }
 .prop-table tr:last-child td { border-bottom: none; }
 
-.rule-tag { display: inline-block; background: var(--bg-main); padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: var(--text-secondary); }
-.rule-tag.allow { background: var(--bg-main); color: var(--accent); border-color: var(--border-color); font-weight: bold; }
-.rule-tag.deny { background: var(--bg-main); color: #f87171; border-color: var(--border-color); font-weight: bold; }
-.rule-tag.highlight { background: var(--bg-main); color: var(--accent); border-color: var(--border-color); }
+.rule-tag { display: inline-block; background: #0f172a; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: #94a3b8; }
+.rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; font-weight: bold; }
+.rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; font-weight: bold; }
+.rule-tag.highlight { background: #1e3a8a; color: #bfdbfe; border-color: #3b82f6; }
 
 /* 2-Column Info Page Layout */
 .info-grid {
@@ -865,10 +866,10 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 .org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
 .tree-node { margin-left: 20px; padding: 4px 0; }
-.tree-folder { color: var(--accent); font-weight: bold; }
-.tree-leaf { color: var(--text-primary); margin: 2px 0; }
-.switch-link { color: var(--accent); text-decoration: none; font-weight: 600; }
-.switch-link:hover { text-decoration: underline; color: var(--accent-hover); }
+.tree-folder { color: #60a5fa; font-weight: bold; }
+.tree-leaf { color: #cbd5e1; margin: 2px 0; }
+.switch-link { color: #60a5fa; text-decoration: none; font-weight: 600; }
+.switch-link:hover { text-decoration: underline; color: #93c5fd; }
 
 .empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 </style>
@@ -878,9 +879,9 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 <div class="sidebar">
     <div class="brand">
-        <div class="logo">🔒</div>
+        <div class="logo">II</div>
         <div>
-            <h1>PerDef Security Orchestrator</h1>
+            <h1>Infra Intel</h1>
             <small>Unified Security Dashboard</small>
         </div>
     </div>
@@ -892,7 +893,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         <button class="tab-btn" onclick="switchTab('automation', this)">⚙️ Automation Results</button>
         <button class="tab-btn" onclick="switchTab('info', this)">ℹ️ Information & Links</button>
         <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
-        <button class="tab-btn" onclick="switchTab('about', this)">ℹ️ About / Site Info</button>
     </div>
 
     <div class="sidebar-footer">
@@ -1012,6 +1012,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
             </div>
             <div style="padding: 20px;">
                 <div class="info-grid">
+                    <!-- Column 1: Systems & Tools -->
                     <div>
                         <div class="link-column-title">🛠️ System & Tool Portals</div>
 
@@ -1064,6 +1065,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                         </div>
                     </div>
 
+                    <!-- Column 2: General & Information -->
                     <div>
                         <div class="link-column-title">📚 General & Information Links</div>
 
@@ -1131,24 +1133,6 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
-    <div id="tab-about" class="tab-content">
-        <div class="beta-banner">
-            ⚠️ <b>Early Beta Warning:</b> This search tool is currently in early preview. Always manually double-check and verify findings against your source system before performing administrative changes.
-        </div>
-        <div class="section">
-            <div class="section-title">
-                <h2>About & Site Info</h2>
-            </div>
-            <div style="padding: 20px;">
-                <table class="prop-table">
-                    <tr><th>Site Name</th><td>PerDef Security Orchestrator</td></tr>
-                    <tr><th>Version</th><td>v.01 (beta)</td></tr>
-                    <tr><th>Owner</th><td>PerDef Team</td></tr>
-                </table>
-            </div>
-        </div>
-    </div>
-
 </div>
 
 <script>
@@ -1179,7 +1163,7 @@ function setSummary(s) {
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
             <div class="card palo-card"><b>${s.palo_objects}</b><span>Palo Alto Objects & Groups</span></div>
             <div class="card palo-card"><b>${s.palo_rules}</b><span>Palo Alto Security & NAT Rules</span></div>
-            <div class="card" style="border-color:#fbc600;"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
+            <div class="card" style="border-color:#475569;"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
         </div>
     `;
 }
@@ -1419,7 +1403,7 @@ function render(data) {
         html += `
             <div class="section" style="border-style: dashed;">
                 <details>
-                    <summary style="padding: 16px; font-size: 14px; background: var(--bg-main);">
+                    <summary style="padding: 16px; font-size: 14px; background: #141e33;">
                         📄 Parsed Full Collections (all_entries.json Files) — <b>${data.all_entries_matches.length} items hidden</b>
                     </summary>
                     <div>
