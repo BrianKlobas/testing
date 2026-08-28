@@ -456,6 +456,42 @@ class InfrastructureDataSource:
                     for block in v_data.get("CidrBlockAssociationSet", []):
                         if isinstance(block, dict) and block.get("CidrBlock"):
                             related_cidrs_to_match.add(block["CidrBlock"])
+
+      # 2. Immediately following the AWS loop, place the new Palo Alto lookup block 
+        # so it utilizes the newly discovered subnets/VPCs from related_cidrs_to_match:
+        palo_matched_objects = set()
+        
+        all_target_nets = [query_network] if query_network else []
+        for c_str in related_cidrs_to_match:
+            net_obj = extract_ip_or_cidr(c_str)
+            if net_obj:
+                all_target_nets.append(net_obj)
+
+        cursor.execute("""
+            SELECT r.id, r.name, r.category, r.data, d.name as device_name 
+            FROM records r JOIN devices d ON r.device_id = d.id 
+            WHERE r.category LIKE '%object%' OR r.category LIKE '%address%' OR r.category LIKE '%group%'
+        """)
+        
+        for row in cursor.fetchall():
+            try:
+                p_data = json.loads(row["data"])
+                p_val = p_data.get("ip_net") or p_data.get("address") or p_data.get("value") or row["name"]
+                p_net = extract_ip_or_cidr(str(p_val))
+                
+                if p_net:
+                    for t_net in all_target_nets:
+                        if t_net.subnet_of(p_net) or p_net.subnet_of(t_net) or t_net == t_net:
+                            output["palo_matches"].append({
+                                "device": row["device_name"],
+                                "type": row["category"],
+                                "file": "",
+                                "name": row["name"],
+                                "data": p_data
+                            })
+                            break
+            except Exception:
+                continue
                           
         for dev_name, sg_id in attached_sg_ids:
             cursor.execute("""
