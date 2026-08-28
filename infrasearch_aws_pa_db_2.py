@@ -255,7 +255,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
                     continue
                 
                 name = ""
-                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name"):
+                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name", "Id"):
                     if item.get(name_key):
                         name = str(item[name_key])
                         if "arn:aws:" in name:
@@ -323,6 +323,7 @@ class InfrastructureDataSource:
             "query_type": "ip_or_cidr" if query_network else "text",
             "matched_objects": [],
             "matched_rules": [],
+            "all_entries_matches": [],
             "aws_matches": [],
             "attached_security_groups": [],
             "summary": {}
@@ -453,6 +454,7 @@ class InfrastructureDataSource:
         all_panos_records = cursor.fetchall()
 
         def classify_and_append_panos(row_dict, item_payload):
+            filename = str(row_dict["filename"]).lower()
             cat = str(row_dict["category"]).lower()
             rec = {
                 "device": row_dict["device"],
@@ -461,7 +463,10 @@ class InfrastructureDataSource:
                 "name": row_dict["name"],
                 "data": item_payload
             }
-            if "rule" in cat or "policy" in cat or "nat" in cat:
+
+            if "all_entries" in filename or "all_entries" in cat:
+                output["all_entries_matches"].append(rec)
+            elif "rule" in cat or "policy" in cat or "nat" in cat:
                 output["matched_rules"].append(rec)
             else:
                 output["matched_objects"].append(rec)
@@ -544,7 +549,8 @@ class InfrastructureDataSource:
             "aws_resources": len(output["aws_matches"]),
             "attached_sgs": len(output["attached_security_groups"]),
             "palo_objects": len(output["matched_objects"]),
-            "palo_rules": len(output["matched_rules"])
+            "palo_rules": len(output["matched_rules"]),
+            "all_entries": len(output["all_entries_matches"])
         }
 
         conn.close()
@@ -659,6 +665,19 @@ body {
 .tab-content { display: none; }
 .tab-content.active { display: block; }
 
+.beta-banner {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid #d97706;
+    color: #fef3c7;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .search-panel {
     background: var(--bg-surface);
     border-radius: 12px;
@@ -689,7 +708,7 @@ button.secondary { background: #334155; color: var(--text-primary); }
 
 .summary {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 14px;
     margin: 18px 0;
 }
@@ -777,7 +796,6 @@ button.secondary { background: #334155; color: var(--text-primary); }
     font-weight: 600;
 }
 .badge.blue { background: #1e3a8a; color: #93c5fd; border: 1px solid #1d4ed8; }
-.badge.green { background: #064e3b; color: #6ee7b7; border: 1px solid #047857; }
 .badge.aws { background: #451a03; color: #fdba74; border: 1px solid #c2410c; }
 .badge.sg { background: #3b0764; color: #d8b4fe; border: 1px solid #7e22ce; }
 .badge.palo { background: rgba(255, 107, 0, 0.15); color: #ff9d5c; border: 1px solid var(--palo-orange); }
@@ -797,35 +815,61 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 .rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; font-weight: bold; }
 .rule-tag.highlight { background: #1e3a8a; color: #bfdbfe; border-color: #3b82f6; }
 
-.link-grid {
+/* 2-Column Info Page Layout */
+.info-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 16px;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
     margin-top: 14px;
 }
+@media (max-width: 900px) {
+    .info-grid { grid-template-columns: 1fr; }
+}
+
+.link-column-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 14px;
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 8px;
+}
+
 .link-card {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-radius: 10px;
     padding: 16px;
+    margin-bottom: 14px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
 }
-.link-card h4 { margin: 0 0 8px 0; color: var(--text-primary); }
-.link-card p { margin: 0 0 14px 0; font-size: 13px; color: var(--text-secondary); }
+.link-card h4 { margin: 0 0 6px 0; color: var(--text-primary); font-size: 14px; }
+.link-card p { margin: 0 0 10px 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.4; }
 .link-card a {
     color: var(--accent);
     text-decoration: none;
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 600;
 }
 .link-card a:hover { text-decoration: underline; }
 
+.sub-links {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-color);
+}
+
 .org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
 .tree-node { margin-left: 20px; padding: 4px 0; }
-.tree-folder { color: #60a5fa; font-weight: bold; cursor: pointer; }
-.tree-leaf { color: #cbd5e1; }
+.tree-folder { color: #60a5fa; font-weight: bold; }
+.tree-leaf { color: #cbd5e1; margin: 2px 0; }
+.switch-link { color: #60a5fa; text-decoration: none; font-weight: 600; }
+.switch-link:hover { text-decoration: underline; color: #93c5fd; }
 
 .empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 </style>
@@ -859,14 +903,18 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 <div class="main-wrapper">
 
     <div id="tab-search" class="tab-content active">
+        <div class="beta-banner">
+            ⚠️ <b>Early Beta Warning:</b> This search tool is currently in early preview. Always manually double-check and verify findings against your source system before performing administrative changes.
+        </div>
+
         <div class="search-panel">
             <div class="search-row">
-                <input id="query" placeholder="Search IP, CIDR, Instance ID (i-xxxx), ENI ID, Security Group, Palo Rule..." autocomplete="off">
+                <input id="query" placeholder="Search IP, CIDR, Instance ID (i-xxxx), ENI ID, Route53 Domain/Record, Palo Rule..." autocomplete="off">
                 <button onclick="investigate()">Investigate</button>
                 <button class="secondary" onclick="clearAll()">Clear</button>
             </div>
             <div class="hint">
-                💡 Full Palo Alto object, group, & security rule detail parser enabled.
+                💡 High-noise 'all_entries' objects are cleanly tucked away in an expandable tray at the bottom.
             </div>
         </div>
 
@@ -881,6 +929,11 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
             <div class="section-title">
                 <h2>AWS Organization Hierarchy</h2>
                 <span id="orgMeta" class="count">Ready</span>
+            </div>
+            <div style="padding: 16px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-surface); display: flex; align-items: center; gap: 12px;">
+                <label for="crossRoleInput" style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Cross-Account Role Name:</label>
+                <input id="crossRoleInput" type="text" placeholder="e.g. OrganizationAccountAccessRole or SecurityAdmin" style="height: 36px; width: 320px;" oninput="renderOrgTreeWithRole()">
+                <small style="color: var(--text-secondary);">Populating this makes AWS account IDs clickable direct Switch-Role links.</small>
             </div>
             <div style="padding: 20px;" id="orgTreeView" class="org-tree">
                 <div class="empty">Loading organization topology...</div>
@@ -955,38 +1008,112 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
     <div id="tab-info" class="tab-content">
         <div class="section">
             <div class="section-title">
-                <h2>Useful Links & Infrastructure Documentation</h2>
+                <h2>Useful Links & Infrastructure Portals</h2>
             </div>
             <div style="padding: 20px;">
-                <p style="margin-top:0; color: var(--text-secondary); font-size: 14px;">Quick access to internal documentation, dashboards, and security portals.</p>
-                <div class="link-grid">
-                    <div class="link-card">
-                        <div>
+                <div class="info-grid">
+                    <!-- Column 1: Systems & Tools -->
+                    <div>
+                        <div class="link-column-title">🛠️ System & Tool Portals</div>
+
+                        <div class="link-card">
+                            <h4>Splunk Enterprise Log Management</h4>
+                            <p>Centralized SIEM log search, firewall traffic analysis, and SOC alerts.</p>
+                            <a href="#" onclick="alert('Configure internal Splunk URL in script.'); return false;">Open Splunk &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
                             <h4>AWS Management Console</h4>
-                            <p>Direct SSO portal access for cloud tenant administration and EC2 instance management.</p>
+                            <p>Direct SSO portal access for cloud tenant administration and EC2 management.</p>
+                            <a href="https://aws.amazon.com/console/" target="_blank">Open AWS Console &rarr;</a>
                         </div>
-                        <a href="https://aws.amazon.com/console/" target="_blank">Open Console &rarr;</a>
-                    </div>
-                    <div class="link-card">
-                        <div>
+
+                        <div class="link-card">
                             <h4>Palo Alto Panorama Portal</h4>
-                            <p>Centralized firewall policy manager, security profile configuration, and network rule inspection.</p>
+                            <p>Centralized firewall policy manager, security profile configuration, and rule inspection.</p>
+                            <a href="#" onclick="alert('Configure Panorama URL in script.'); return false;">Open Panorama &rarr;</a>
                         </div>
-                        <a href="#" onclick="alert('Configure internal Panorama URL in script.'); return false;">Open Panorama &rarr;</a>
+
+                        <div class="link-card">
+                            <h4>Microsoft Azure Portal</h4>
+                            <p>Cloud tenant administration, VNets, and Enterprise application management.</p>
+                            <a href="https://portal.azure.com" target="_blank">Open Azure Portal &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Infoblox IPAM & Grid Manager</h4>
+                            <p>Enterprise IP Address Management, DNS zone administrative panel, and DHCP scopes.</p>
+                            <a href="#" onclick="alert('Configure Infoblox URL in script.'); return false;">Open Infoblox &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Wiz Cloud Security Platform</h4>
+                            <p>Cloud Security Posture Management (CSPM), vulnerability management, and risk graphs.</p>
+                            <a href="#" onclick="alert('Configure Wiz URL in script.'); return false;">Open Wiz &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AlgoSec Firewall Analyzer</h4>
+                            <p>Automated security policy analysis, change management, and firewall rule cleanup.</p>
+                            <a href="#" onclick="alert('Configure AlgoSec URL in script.'); return false;">Open AlgoSec &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Akamai Control Center</h4>
+                            <p>Edge Security, Web Application Firewall (WAF) rule tuning, and CDN management.</p>
+                            <a href="https://control.akamai.com" target="_blank">Open Akamai Portal &rarr;</a>
+                        </div>
                     </div>
-                    <div class="link-card">
-                        <div>
-                            <h4>Internal IPAM Portal</h4>
-                            <p>Centralized IP Address Management database and subnet allocation records.</p>
+
+                    <!-- Column 2: General & Information -->
+                    <div>
+                        <div class="link-column-title">📚 General & Information Links</div>
+
+                        <div class="link-card">
+                            <h4>ServiceNow Portal</h4>
+                            <p>Enterprise IT Service Management for submitting security requests and incidents.</p>
+                            <div class="sub-links">
+                                <a href="#" onclick="alert('Configure FW Request URL'); return false;">🔥 Firewall Request</a>
+                                <a href="#" onclick="alert('Configure Proxy Request URL'); return false;">🌐 Proxy Request</a>
+                                <a href="#" onclick="alert('Configure Security Tab URL'); return false;">🛡️ Security Tab</a>
+                            </div>
                         </div>
-                        <a href="#" onclick="alert('Configure internal IPAM URL in script.'); return false;">Open IPAM &rarr;</a>
-                    </div>
-                    <div class="link-card">
-                        <div>
-                            <h4>Security Runbooks & Docs</h4>
-                            <p>Guides for security group management, firewall rule requests, and Incident Response procedures.</p>
+
+                        <div class="link-card">
+                            <h4>Security Standards & Compliance</h4>
+                            <p>Corporate baseline security policies, hardening standards, and governance rules.</p>
+                            <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Security Standards &rarr;</a>
                         </div>
-                        <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Documentation &rarr;</a>
+
+                        <div class="link-card">
+                            <h4>Network Documentation</h4>
+                            <p>High-level architectural diagrams, VLAN mapping tables, and routing policies.</p>
+                            <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Network Docs &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>On-Premise Network Diagrams</h4>
+                            <p>Data center topologies, core distribution layer Visio maps, and edge WAN layouts.</p>
+                            <a href="#" onclick="alert('Configure diagram link in script.'); return false;">View On-Prem Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AWS Architecture Diagrams</h4>
+                            <p>Transit Gateway layouts, VPC peering maps, and cross-account network designs.</p>
+                            <a href="#" onclick="alert('Configure AWS diagram link in script.'); return false;">View AWS Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Azure Architecture Diagrams</h4>
+                            <p>Hub-and-Spoke topology diagrams, Azure ExpressRoute connections, and Virtual WAN maps.</p>
+                            <a href="#" onclick="alert('Configure Azure diagram link in script.'); return false;">View Azure Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Run Books & Operational Procedures</h4>
+                            <p>Step-by-step procedures for standard infrastructure operations, failovers, and emergency changes.</p>
+                            <a href="#" onclick="alert('Configure Runbooks link in script.'); return false;">View Run Books &rarr;</a>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1009,6 +1136,9 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 </div>
 
 <script>
+let currentOrgData = null;
+let currentSearchQuery = "";
+
 function switchTab(tabId, btn) {
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -1033,6 +1163,7 @@ function setSummary(s) {
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
             <div class="card palo-card"><b>${s.palo_objects}</b><span>Palo Alto Objects & Groups</span></div>
             <div class="card palo-card"><b>${s.palo_rules}</b><span>Palo Alto Security & NAT Rules</span></div>
+            <div class="card" style="border-color:#475569;"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
         </div>
     `;
 }
@@ -1041,7 +1172,6 @@ function section(title, count, body) {
     return `<div class="section"><div class="section-title"><h2>${title}</h2><span class="count">${count}</span></div>${body}</div>`;
 }
 
-// Deep unwrapper for PAN-OS nested XML elements
 function extractValues(obj) {
     if (obj === null || obj === undefined) return [];
     if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') {
@@ -1060,7 +1190,6 @@ function extractValues(obj) {
         
         if (results.length > 0) return results;
 
-        // Fallback: extract string values from direct dictionary keys
         for (const [k, v] of Object.entries(obj)) {
             if (!k.startsWith('@')) {
                 results.push(...extractValues(v));
@@ -1079,7 +1208,6 @@ function renderPillList(val, defaultLabel = 'any') {
     return items.map(i => `<span class="rule-tag highlight">${esc(i)}</span>`).join(' ');
 }
 
-// Deep search helper for specific key targets across objects
 function findKeyRecursively(obj, keys) {
     if (!obj || typeof obj !== 'object') return undefined;
     for (const k of keys) {
@@ -1094,12 +1222,66 @@ function findKeyRecursively(obj, keys) {
     return undefined;
 }
 
+function renderRoute53Details(data, query) {
+    const raw = data || {};
+    const recordSets = raw.ResourceRecordSets || raw.ResourceRecords || [];
+    const qLower = (query || "").toLowerCase();
+
+    let matchedRecords = [];
+
+    if (Array.isArray(recordSets)) {
+        for (const r of recordSets) {
+            const strRepresentation = JSON.stringify(r).toLowerCase();
+            if (!qLower || strRepresentation.includes(qLower)) {
+                matchedRecords.push(r);
+            }
+        }
+    }
+
+    if (matchedRecords.length === 0 && Array.isArray(recordSets)) {
+        matchedRecords = recordSets.slice(0, 10);
+    }
+
+    let html = `<div style="margin-top: 10px;">`;
+    html += `<b style="font-size:13px; color: var(--accent);">Matched Route53 Resource Record(s):</b>`;
+    html += `<table class="prop-table" style="margin-top:6px;">`;
+    html += `<tr><th>Record Name / FQDN</th><th>Type</th><th>TTL</th><th>Values / Targets</th></tr>`;
+
+    for (const rec of matchedRecords) {
+        const rName = rec.Name || rec.name || "-";
+        const rType = rec.Type || rec.type || "-";
+        const rTTL = rec.TTL ?? rec.ttl ?? "-";
+        
+        let values = [];
+        if (Array.isArray(rec.ResourceRecords)) {
+            values = rec.ResourceRecords.map(v => typeof v === 'object' ? (v.Value || JSON.stringify(v)) : v);
+        } else if (rec.AliasTarget) {
+            values.push("Alias: " + (rec.AliasTarget.DNSName || JSON.stringify(rec.AliasTarget)));
+        } else if (rec.Value) {
+            values.push(rec.Value);
+        }
+
+        const formattedValues = values.length > 0 
+            ? values.map(v => `<span class="rule-tag highlight">${esc(v)}</span>`).join(" ")
+            : `<i style="color:var(--text-secondary)">None</i>`;
+
+        html += `<tr>`;
+        html += `<td><b>${esc(rName)}</b></td>`;
+        html += `<td><span class="badge blue">${esc(rType)}</span></td>`;
+        html += `<td>${esc(rTTL)}</td>`;
+        html += `<td>${formattedValues}</td>`;
+        html += `</tr>`;
+    }
+
+    html += `</table></div>`;
+    return html;
+}
+
 function renderPaloAltoDetails(x) {
     const raw = x.data || {};
     const d = raw.entry || raw;
     const cat = (x.type || "").toLowerCase();
 
-    // 1. SECURITY & NAT RULES DISPLAY
     if (cat.includes("rule") || cat.includes("policy") || cat.includes("nat") || d.action || d.from || d.to) {
         const action = findKeyRecursively(d, ['action']) || 'allow';
         const actionBadge = (String(action).toLowerCase() === "allow") 
@@ -1129,11 +1311,9 @@ function renderPaloAltoDetails(x) {
         return html;
     }
 
-    // 2. OBJECTS & OBJECT GROUPS DISPLAY (Name, Description, Members / Values)
     const nameVal = x.name || findKeyRecursively(d, ['name', '@name']) || 'Unnamed Object';
     const descVal = findKeyRecursively(d, ['description']);
     
-    // Check all possible object / group value containers
     const ipNetmask = findKeyRecursively(d, ['ip-netmask', 'ip_netmask']);
     const ipRange = findKeyRecursively(d, ['ip-range', 'ip_range']);
     const fqdn = findKeyRecursively(d, ['fqdn']);
@@ -1148,20 +1328,11 @@ function renderPaloAltoDetails(x) {
         html += `<tr><th>Description</th><td><i style="color:var(--text-secondary)">None</i></td></tr>`;
     }
 
-    if (members) {
-        html += `<tr><th>Group Members</th><td>${renderPillList(members, 'None')}</td></tr>`;
-    }
-    if (ipNetmask) {
-        html += `<tr><th>IP / Subnet</th><td>${renderPillList(ipNetmask)}</td></tr>`;
-    }
-    if (ipRange) {
-        html += `<tr><th>IP Range</th><td>${renderPillList(ipRange)}</td></tr>`;
-    }
-    if (fqdn) {
-        html += `<tr><th>FQDN</th><td>${renderPillList(fqdn)}</td></tr>`;
-    }
+    if (members) html += `<tr><th>Group Members</th><td>${renderPillList(members, 'None')}</td></tr>`;
+    if (ipNetmask) html += `<tr><th>IP / Subnet</th><td>${renderPillList(ipNetmask)}</td></tr>`;
+    if (ipRange) html += `<tr><th>IP Range</th><td>${renderPillList(ipRange)}</td></tr>`;
+    if (fqdn) html += `<tr><th>FQDN</th><td>${renderPillList(fqdn)}</td></tr>`;
 
-    // Fallback if no known member/value fields were extracted
     if (!members && !ipNetmask && !ipRange && !fqdn) {
         const genericVals = extractValues(d).filter(v => v !== nameVal);
         if (genericVals.length > 0) {
@@ -1189,10 +1360,16 @@ function itemHTML(x, badgeClass) {
     const rawData = x.data || {};
     const evalData = rawData.entry || rawData;
     const displayName = x.name || evalData.name || evalData['@name'] || "Unnamed Record";
+    const categoryLower = (x.type || "").toLowerCase();
     
-    let extraDetails = (badgeClass === "palo" || badgeClass === "green") 
-        ? renderPaloAltoDetails(x) 
-        : renderProperties(x.data);
+    let extraDetails = "";
+    if (badgeClass === "palo") {
+        extraDetails = renderPaloAltoDetails(x);
+    } else if (categoryLower.includes("route53") || categoryLower.includes("r53") || categoryLower.includes("hostedzone") || rawData.ResourceRecordSets) {
+        extraDetails = renderRoute53Details(rawData, currentSearchQuery);
+    } else {
+        extraDetails = renderProperties(x.data);
+    }
 
     return `
         <div class="item">
@@ -1220,6 +1397,23 @@ function render(data) {
     if (data.attached_security_groups.length) html += section("Attached Security Groups", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
     if (data.matched_objects.length) html += section("Palo Alto Objects & Groups", data.matched_objects.length, data.matched_objects.map(x => itemHTML(x, "palo")).join(""));
     if (data.matched_rules.length) html += section("Palo Alto Security Rules & NATs", data.matched_rules.length, data.matched_rules.map(x => itemHTML(x, "palo")).join(""));
+    
+    if (data.all_entries_matches && data.all_entries_matches.length > 0) {
+        const allEntriesContent = data.all_entries_matches.map(x => itemHTML(x, "palo")).join("");
+        html += `
+            <div class="section" style="border-style: dashed;">
+                <details>
+                    <summary style="padding: 16px; font-size: 14px; background: #141e33;">
+                        📄 Parsed Full Collections (all_entries.json Files) — <b>${data.all_entries_matches.length} items hidden</b>
+                    </summary>
+                    <div>
+                        ${allEntriesContent}
+                    </div>
+                </details>
+            </div>
+        `;
+    }
+
     if (!html) html = `<div class="empty">No matching records found.</div>`;
     document.getElementById("output").innerHTML = html;
 }
@@ -1227,6 +1421,7 @@ function render(data) {
 async function investigate() {
     const q = document.getElementById("query").value.trim();
     if (!q) return;
+    currentSearchQuery = q;
     document.getElementById("output").innerHTML = `<div class="empty">Searching indexed database for <b>${esc(q)}</b>...</div>`;
     try {
         const res = await fetch("/api/investigate?q=" + encodeURIComponent(q));
@@ -1237,7 +1432,7 @@ async function investigate() {
     }
 }
 
-function buildTreeHTML(node) {
+function buildTreeHTML(node, roleName) {
     if (!node) return '';
     let html = '';
     const name = node.Name || node.Id || node.name || 'Unit';
@@ -1252,19 +1447,34 @@ function buildTreeHTML(node) {
         accounts.forEach(acc => {
             const accName = acc.Name || acc.Id;
             const accId = acc.Id || acc.AccountId || '';
-            html += `<div class="tree-leaf">📄 ${esc(accName)} <span style="color:var(--text-secondary);">(${esc(accId)})</span></div>`;
+            
+            let accountLabelHTML = `<b>${esc(accName)}</b> <span style="color:var(--text-secondary);">(${esc(accId)})</span>`;
+            if (roleName && accId) {
+                const switchUrl = `https://signin.aws.amazon.com/switchrole?account=${encodeURIComponent(accId)}&roleName=${encodeURIComponent(roleName)}`;
+                accountLabelHTML = `<a class="switch-link" href="${switchUrl}" target="_blank" title="Click to Switch Role in AWS Console">📄 ${esc(accName)} <span style="color:var(--text-secondary);">(${esc(accId)})</span> 🔗 Switch Role</a>`;
+            } else {
+                accountLabelHTML = `📄 ${accountLabelHTML}`;
+            }
+
+            html += `<div class="tree-leaf">${accountLabelHTML}</div>`;
         });
         html += `</div>`;
     }
 
     if (children.length > 0) {
         html += `<div style="margin-left: 10px;">`;
-        children.forEach(child => html += buildTreeHTML(child));
+        children.forEach(child => html += buildTreeHTML(child, roleName));
         html += `</div>`;
     }
 
     html += `</div>`;
     return html;
+}
+
+function renderOrgTreeWithRole() {
+    if (!currentOrgData) return;
+    const roleName = document.getElementById("crossRoleInput").value.trim();
+    document.getElementById("orgTreeView").innerHTML = buildTreeHTML(currentOrgData.Hierarchy || currentOrgData, roleName);
 }
 
 async function loadOrgTopology() {
@@ -1275,7 +1485,8 @@ async function loadOrgTopology() {
             document.getElementById("orgTreeView").innerHTML = `<div class="empty">${esc(data.error)}</div>`;
             return;
         }
-        document.getElementById("orgTreeView").innerHTML = buildTreeHTML(data.Hierarchy || data);
+        currentOrgData = data;
+        renderOrgTreeWithRole();
         document.getElementById("orgMeta").textContent = "Loaded";
     } catch(e) {
         document.getElementById("orgTreeView").innerHTML = `<div class="empty">Unable to render topology tree.</div>`;
