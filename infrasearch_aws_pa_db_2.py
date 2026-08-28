@@ -4,11 +4,13 @@ PerDef Security Orchestrator GUI (Left-Sidebar Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
   1. Search & Investigation
-  2. AWS Organization Topology Explorer
-  3. PAN-OS Panorama Topology & Mapping
-  4. Automation Results & Collection Status
-  5. Information & Useful Links
-  6. Data Collection Metrics & Analytics
+  2. Firewall Policy Lookup
+  3. AWS Organization Topology Explorer
+  4. PAN-OS Panorama Topology & Mapping
+  5. Automation Results & Collection Status
+  6. Information & Useful Links
+  7. Data Collection Metrics & Analytics
+  8. About / Site Info
 
 Run:
     python infra_intel.py --firewall-data ./parsed --aws-data ./aws_parsed --org-file org_topology.json --pan-file panorama_topology.json --db infra_intel.db
@@ -629,6 +631,7 @@ body {
 .nav-menu {
     display: flex;
     flex-direction: column;
+    gap: 4px;
     padding: 16px 12px;
     flex: 1;
 }
@@ -903,13 +906,13 @@ summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600
     
     <div class="nav-menu">
         <button class="tab-btn active" onclick="switchTab('search', this)">🔍 Search & Investigate</button>
+        <button class="tab-btn" onclick="switchTab('policyLookup', this)">🛡️ Firewall Policy Lookup</button>
         <button class="tab-btn" onclick="switchTab('org', this)">🏢 AWS Org Topology</button>
         <button class="tab-btn" onclick="switchTab('pan', this)">🔥 PAN Panorama Topology</button>
         <button class="tab-btn" onclick="switchTab('automation', this)">⚙️ Automation Results</button>
         <button class="tab-btn" onclick="switchTab('info', this)">ℹ️ Information & Links</button>
         <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
         
-        <!-- Pushed to the bottom of the sidebar list -->
         <button class="tab-btn" onclick="switchTab('about', this)" style="margin-top: auto;">ℹ️ About / Site Info</button>
     </div>
 
@@ -939,6 +942,28 @@ summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600
         <div id="summary"></div>
         <div id="output">
             <div class="empty">Enter a query above to start exploring your infrastructure.</div>
+        </div>
+    </div>
+
+    <div id="tab-policyLookup" class="tab-content">
+        <div class="beta-banner">
+            🛡️ <b>Firewall Policy Intersection Lookup:</b> Enter a source, destination, and optional port/service to find existing firewall rules where both entities match together.
+        </div>
+
+        <div class="search-panel">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; flex-wrap: wrap;">
+                <input id="lookupSource" placeholder="Source IP, Subnet, or Object..." autocomplete="off">
+                <input id="lookupDest" placeholder="Destination IP, Subnet, or Object..." autocomplete="off">
+                <input id="lookupPort" placeholder="Port / Service (Optional)..." autocomplete="off">
+                <button onclick="executePolicyLookup()">Check Rules</button>
+            </div>
+            <div class="hint">
+                💡 Useful for firewall change requests to quickly verify if an access path is already permitted by existing rules.
+            </div>
+        </div>
+
+        <div id="policyLookupOutput" style="margin-top: 20px;">
+            <div class="empty">Enter source, destination, and optional port above to query rules.</div>
         </div>
     </div>
 
@@ -1469,6 +1494,40 @@ async function investigate() {
     }
 }
 
+async function executePolicyLookup() {
+    const src = document.getElementById("lookupSource").value.trim();
+    const dst = document.getElementById("lookupDest").value.trim();
+    const port = document.getElementById("lookupPort").value.trim();
+
+    if (!src && !dst) {
+        alert("Please enter at least a Source or Destination to search.");
+        return;
+    }
+
+    document.getElementById("policyLookupOutput").innerHTML = `<div class="empty">Querying firewall policies for matching intersections...</div>`;
+    
+    try {
+        const params = new URLSearchParams();
+        if (src) params.append("src", src);
+        if (dst) params.append("dst", dst);
+        if (port) params.append("port", port);
+
+        const res = await fetch("/api/policy-lookup?" + params.toString());
+        const data = await res.json();
+
+        if (data.rules && data.rules.length > 0) {
+            let html = `<div class="section"><div class="section-title"><h2>Matching Rules & Intersections</h2><span class="count">${data.rules.length} Rules Found</span></div>`;
+            html += data.rules.map(x => itemHTML(x, "palo")).join("");
+            html += `</div>`;
+            document.getElementById("policyLookupOutput").innerHTML = html;
+        } else {
+            document.getElementById("policyLookupOutput").innerHTML = `<div class="empty">No intersecting firewall rules found matching the given criteria.</div>`;
+        }
+    } catch (err) {
+        document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Error executing policy lookup query.</div>`;
+    }
+}
+
 function buildTreeHTML(node, roleName) {
     if (!node) return '';
     let html = '';
@@ -1654,6 +1713,73 @@ def api_investigate():
     except Exception as exc:
         app.logger.exception("Investigation failed")
         return jsonify({"error": str(exc)}), 500
+
+@app.route("/api/policy-lookup")
+def api_policy_lookup():
+    src_query = request.args.get("src", "").strip().lower()
+    dst_query = request.args.get("dst", "").strip().lower()
+    port_query = request.args.get("port", "").strip().lower()
+
+    conn = get_db(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+        FROM records r
+        JOIN devices d ON r.device_id = d.id
+        WHERE r.platform = 'panos' AND (r.category LIKE '%rule%' OR r.category LIKE '%policy%' OR r.category LIKE '%nat%')
+    """)
+    
+    matched_rules = []
+    rows = cursor.fetchall()
+    conn.close()
+
+    for row in rows:
+        try:
+            item_data = json.loads(row["data"])
+        except json.JSONDecodeError:
+            continue
+
+        d = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+        if not isinstance(d, dict):
+            continue
+
+        sources = [str(x).lower() for x in extractValues(findKeyRecursively(d, ['source']))]
+        destinations = [str(x).lower() for x in extractValues(findKeyRecursively(d, ['destination', 'dest']))]
+        services = [str(x).lower() for x in extractValues(findKeyRecursively(d, ['service', 'port']))]
+
+        def matches_any(query_str, value_list):
+            if not query_str:
+                return True
+            if "any" in value_list:
+                return True
+            for val in value_list:
+                if query_str in val or val in query_str:
+                    return True
+                if sqlite_ip_contains(query_str, val) or sqlite_ip_contains(val, query_str):
+                    return True
+            return False
+
+        src_match = matches_any(src_query, sources) if src_query else True
+        dst_match = matches_any(dst_query, destinations) if dst_query else True
+        port_match = matches_any(port_query, services) if port_query else True
+
+        if src_query and not src_match:
+            continue
+        if dst_query and not dst_match:
+            continue
+        if port_query and not port_match:
+            continue
+
+        matched_rules.append({
+            "device": row["device"],
+            "type": row["category"],
+            "file": row["filename"],
+            "name": row["name"],
+            "data": item_data
+        })
+
+    return jsonify({"rules": matched_rules})
 
 
 if __name__ == "__main__":
