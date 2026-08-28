@@ -396,12 +396,12 @@ class InfrastructureDataSource:
             subnet_id = item.get("SubnetId")
             vpc_id = item.get("VpcId")
 
-            # 1. Directly check if the matched item itself has a CidrBlock (e.g. if it's a subnet or vpc record)
+            # 1. Directly check if matched item has a CidrBlock (Subnet/VPC)
             item_cidr = item.get("CidrBlock")
             if item_cidr:
                 related_cidrs_to_match.add(item_cidr)
 
-            # 2. Look up Subnets in the same account/device and add their CIDRs if they contain our target IP
+            # 2. Check all account subnets to see if our query IP falls inside them
             cursor.execute("""
                 SELECT data FROM records r JOIN devices d ON r.device_id = d.id
                 WHERE (r.category LIKE '%subnet%') AND d.name = ?
@@ -414,7 +414,7 @@ class InfrastructureDataSource:
                     if s_net and query_network.subnet_of(s_net):
                         related_cidrs_to_match.add(s_cidr)
 
-            # 3. Look up VPCs in the same account/device and add their CIDRs/associations if they contain our target IP
+            # 3. Check all account VPCs to see if our query IP falls inside them
             cursor.execute("""
                 SELECT data FROM records r JOIN devices d ON r.device_id = d.id
                 WHERE (r.category LIKE '%vpc%') AND d.name = ?
@@ -435,7 +435,7 @@ class InfrastructureDataSource:
             if subnet_id:
                 cursor.execute("""
                     SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE (r.category LIKE '%subnet%') AND (r.name = ? OR json_encrypt(r.data, '$.SubnetId') = ?) AND d.name = ?
+                    WHERE (r.category LIKE '%subnet%') AND (r.name = ? OR json_extract(r.data, '$.SubnetId') = ?) AND d.name = ?
                 """, (subnet_id, subnet_id, dev_name))
                 for s_row in cursor.fetchall():
                     s_data = json.loads(s_row["data"])
@@ -456,7 +456,7 @@ class InfrastructureDataSource:
                     for block in v_data.get("CidrBlockAssociationSet", []):
                         if isinstance(block, dict) and block.get("CidrBlock"):
                             related_cidrs_to_match.add(block["CidrBlock"])
-
+                          
         for dev_name, sg_id in attached_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
