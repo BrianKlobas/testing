@@ -9,7 +9,7 @@ Tabs:
   4. Automation Results & Collection Status
   5. Information & Useful Links
   6. Data Collection Metrics & Analytics
-  7. About Infrastructure Intelligence
+  7. About & Site Info
 
 Run:
     python infra_intel.py --firewall-data ./parsed --aws-data ./aws_parsed --org-file org_topology.json --pan-file panorama_topology.json --db infra_intel.db
@@ -256,7 +256,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
                     continue
                 
                 name = ""
-                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Name", "Id"):
+                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name", "Id"):
                     if item.get(name_key):
                         name = str(item[name_key])
                         if "arn:aws:" in name:
@@ -570,19 +570,19 @@ HTML = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Infrastructure Intelligence — Dashboard</title>
+<title>PerDef Security Orchestrator — Dashboard</title>
 <style>
 :root {
-    --bg-main: #0b0f19;
-    --bg-surface: #111827;
-    --bg-card: #1f2937;
-    --border-color: #374151;
-    --text-primary: #f9fafb;
-    --text-secondary: #9ca3af;
-    --accent: #6366f1;
-    --accent-hover: #4f46e5;
-    --palo-orange: #f97316;
-    --code-bg: #030712;
+    --bg-main: #3b3c43;
+    --bg-surface: #3b3c43;
+    --bg-card: #3b3c43;
+    --border-color: #fbc600;
+    --text-primary: #e0eae8;
+    --text-secondary: #94969a;
+    --accent: #fbc600;
+    --accent-hover: #e0eae8;
+    --palo-orange: #fbc600;
+    --code-bg: #3b3c43;
     --sidebar-width: 260px;
 }
 
@@ -616,8 +616,9 @@ body {
     border-bottom: 1px solid var(--border-color);
 }
 .logo {
-    width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #4338ca);
-    display: grid; place-items: center; font-weight: bold; font-size: 15px; color: white;
+    width: 36px; height: 36px; border-radius: 8px; background: transparent;
+    border: 1px solid var(--border-color);
+    display: grid; place-items: center; font-weight: bold; font-size: 18px; color: var(--accent);
 }
 .brand h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.5px; }
 .brand small { color: var(--text-secondary); font-size: 11px; }
@@ -633,7 +634,7 @@ body {
 .tab-btn {
     background: transparent;
     color: var(--text-secondary);
-    border: none;
+    border: 1px solid transparent;
     padding: 12px 14px;
     font-size: 13.5px;
     font-weight: 600;
@@ -646,8 +647,8 @@ body {
     gap: 10px;
 }
 
-.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
-.tab-btn.active { color: #ffffff; background: var(--accent); }
+.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); border-color: var(--border-color); }
+.tab-btn.active { color: #3b3c43; background: var(--accent); border-color: var(--border-color); }
 
 .sidebar-footer {
     padding: 16px;
@@ -667,9 +668,9 @@ body {
 .tab-content.active { display: block; }
 
 .beta-banner {
-    background: rgba(217, 119, 6, 0.15);
-    border: 1px solid #b45309;
-    color: #fef3c7;
+    background: rgba(251, 198, 0, 0.12);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
     padding: 10px 16px;
     border-radius: 8px;
     font-size: 13px;
@@ -683,7 +684,7 @@ body {
     background: var(--bg-surface);
     border-radius: 12px;
     padding: 20px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
     border: 1px solid var(--border-color);
 }
 
@@ -700,10 +701,10 @@ input, button {
     background: var(--bg-main);
     color: var(--text-primary);
 }
-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25); }
-button { background: var(--accent); color: white; border: 0; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(251, 198, 0, 0.25); }
+button { background: var(--accent); color: #3b3c43; border: 1px solid var(--border-color); font-weight: 600; cursor: pointer; transition: background 0.2s; }
 button:hover { background: var(--accent-hover); }
-button.secondary { background: #374151; color: var(--text-primary); }
+button.secondary { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
 
 .hint { color: var(--text-secondary); font-size: 13px; margin-top: 10px; }
 
@@ -753,7 +754,7 @@ button.secondary { background: #374151; color: var(--text-primary); }
     font-weight: 700;
     text-transform: uppercase;
 }
-.status-pill.success { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #059669; }
+.status-pill.success { background: rgba(251, 198, 0, 0.15); color: var(--accent); border: 1px solid var(--border-color); }
 
 .section {
     background: var(--bg-surface);
@@ -769,10 +770,10 @@ button.secondary { background: #374151; color: var(--text-primary); }
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #1f2937;
+    background: var(--bg-main);
 }
 .section-title h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--text-primary); }
-.count { background: #374151; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border: 1px solid var(--border-color); }
+.count { background: var(--bg-surface); border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
 .item { border-bottom: 1px solid var(--border-color); padding: 18px; }
 .item:last-child { border-bottom: 0; }
@@ -784,37 +785,38 @@ button.secondary { background: #374151; color: var(--text-primary); }
     flex-wrap: wrap;
     align-items: center;
 }
-.item-name { font-weight: 700; font-size: 15px; color: #ffffff; }
+.item-name { font-weight: 700; font-size: 15px; color: var(--text-primary); }
 
 .badge {
     display: inline-block;
-    background: #374151;
-    color: #cbd5e1;
+    background: var(--bg-main);
+    color: var(--text-primary);
     border-radius: 6px;
     padding: 3px 8px;
     margin-left: 6px;
     font-size: 11px;
     font-weight: 600;
+    border: 1px solid var(--border-color);
 }
-.badge.blue { background: #3730a3; color: #c7d2fe; border: 1px solid #4338ca; }
-.badge.aws { background: #7c2d12; color: #ffedd5; border: 1px solid #c2410c; }
-.badge.sg { background: #581c87; color: #f3e8ff; border: 1px solid #7e22ce; }
-.badge.palo { background: rgba(249, 115, 22, 0.15); color: #ffedd5; border: 1px solid var(--palo-orange); }
+.badge.blue { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
+.badge.aws { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
+.badge.sg { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
+.badge.palo { background: var(--bg-main); color: var(--text-primary); border: 1px solid var(--border-color); }
 
 .meta { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
-pre { background: var(--code-bg); color: #e5e7eb; border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
+pre { background: var(--code-bg); color: var(--text-primary); border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
 details { margin-top: 10px; }
 summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
 .prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: var(--bg-card); border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color); }
-.prop-table th { background: #111827; color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
+.prop-table th { background: var(--bg-main); color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
 .prop-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); font-family: monospace; word-break: break-all; }
 .prop-table tr:last-child td { border-bottom: none; }
 
-.rule-tag { display: inline-block; background: #111827; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: #9ca3af; }
-.rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; font-weight: bold; }
-.rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; font-weight: bold; }
-.rule-tag.highlight { background: #3730a3; color: #e0e7ff; border-color: #4f46e5; }
+.rule-tag { display: inline-block; background: var(--bg-main); padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: var(--text-secondary); }
+.rule-tag.allow { background: var(--bg-main); color: var(--accent); border-color: var(--border-color); font-weight: bold; }
+.rule-tag.deny { background: var(--bg-main); color: #f87171; border-color: var(--border-color); font-weight: bold; }
+.rule-tag.highlight { background: var(--bg-main); color: var(--accent); border-color: var(--border-color); }
 
 /* 2-Column Info Page Layout */
 .info-grid {
@@ -867,20 +869,10 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 .org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
 .tree-node { margin-left: 20px; padding: 4px 0; }
-.tree-folder { color: #818cf8; font-weight: bold; }
-.tree-leaf { color: #d1d5db; margin: 2px 0; }
-.switch-link { color: #818cf8; text-decoration: none; font-weight: 600; }
-.switch-link:hover { text-decoration: underline; color: #a5b4fc; }
-
-.about-box {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: 10px;
-    padding: 24px;
-    line-height: 1.6;
-}
-.about-box h3 { margin-top: 0; color: var(--accent); }
-.about-box ul { padding-left: 20px; color: var(--text-secondary); }
+.tree-folder { color: var(--accent); font-weight: bold; }
+.tree-leaf { color: var(--text-primary); margin: 2px 0; }
+.switch-link { color: var(--accent); text-decoration: none; font-weight: 600; }
+.switch-link:hover { text-decoration: underline; color: var(--accent-hover); }
 
 .empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 </style>
@@ -890,9 +882,9 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 <div class="sidebar">
     <div class="brand">
-        <div class="logo">II</div>
+        <div class="logo">🔒</div>
         <div>
-            <h1>Infra Intel</h1>
+            <h1>PerDef Security Orchestrator</h1>
             <small>Unified Security Dashboard</small>
         </div>
     </div>
@@ -904,7 +896,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         <button class="tab-btn" onclick="switchTab('automation', this)">⚙️ Automation Results</button>
         <button class="tab-btn" onclick="switchTab('info', this)">ℹ️ Information & Links</button>
         <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
-        <button class="tab-btn" onclick="switchTab('about', this)">📖 About</button>
+        <button class="tab-btn" onclick="switchTab('about', this)">ℹ️ About / Site Info</button>
     </div>
 
     <div class="sidebar-footer">
@@ -1024,6 +1016,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
             </div>
             <div style="padding: 20px;">
                 <div class="info-grid">
+                    <!-- Column 1: Systems & Tools -->
                     <div>
                         <div class="link-column-title">🛠️ System & Tool Portals</div>
 
@@ -1056,8 +1049,27 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                             <p>Enterprise IP Address Management, DNS zone administrative panel, and DHCP scopes.</p>
                             <a href="#" onclick="alert('Configure Infoblox URL in script.'); return false;">Open Infoblox &rarr;</a>
                         </div>
+
+                        <div class="link-card">
+                            <h4>Wiz Cloud Security Platform</h4>
+                            <p>Cloud Security Posture Management (CSPM), vulnerability management, and risk graphs.</p>
+                            <a href="#" onclick="alert('Configure Wiz URL in script.'); return false;">Open Wiz &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AlgoSec Firewall Analyzer</h4>
+                            <p>Automated security policy analysis, change management, and firewall rule cleanup.</p>
+                            <a href="#" onclick="alert('Configure AlgoSec URL in script.'); return false;">Open AlgoSec &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Akamai Control Center</h4>
+                            <p>Edge Security, Web Application Firewall (WAF) rule tuning, and CDN management.</p>
+                            <a href="https://control.akamai.com" target="_blank">Open Akamai Portal &rarr;</a>
+                        </div>
                     </div>
 
+                    <!-- Column 2: General & Information -->
                     <div>
                         <div class="link-column-title">📚 General & Information Links</div>
 
@@ -1067,6 +1079,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                             <div class="sub-links">
                                 <a href="#" onclick="alert('Configure FW Request URL'); return false;">🔥 Firewall Request</a>
                                 <a href="#" onclick="alert('Configure Proxy Request URL'); return false;">🌐 Proxy Request</a>
+                                <a href="#" onclick="alert('Configure Security Tab URL'); return false;">🛡️ Security Tab</a>
                             </div>
                         </div>
 
@@ -1080,6 +1093,30 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
                             <h4>Network Documentation</h4>
                             <p>High-level architectural diagrams, VLAN mapping tables, and routing policies.</p>
                             <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Network Docs &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>On-Premise Network Diagrams</h4>
+                            <p>Data center topologies, core distribution layer Visio maps, and edge WAN layouts.</p>
+                            <a href="#" onclick="alert('Configure diagram link in script.'); return false;">View On-Prem Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AWS Architecture Diagrams</h4>
+                            <p>Transit Gateway layouts, VPC peering maps, and cross-account network designs.</p>
+                            <a href="#" onclick="alert('Configure AWS diagram link in script.'); return false;">View AWS Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Azure Architecture Diagrams</h4>
+                            <p>Hub-and-Spoke topology diagrams, Azure ExpressRoute connections, and Virtual WAN maps.</p>
+                            <a href="#" onclick="alert('Configure Azure diagram link in script.'); return false;">View Azure Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Run Books & Operational Procedures</h4>
+                            <p>Step-by-step procedures for standard infrastructure operations, failovers, and emergency changes.</p>
+                            <a href="#" onclick="alert('Configure Runbooks link in script.'); return false;">View Run Books &rarr;</a>
                         </div>
                     </div>
                 </div>
@@ -1101,27 +1138,19 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
     </div>
 
     <div id="tab-about" class="tab-content">
+        <div class="beta-banner">
+            ⚠️ <b>Early Beta Warning:</b> This search tool is currently in early preview. Always manually double-check and verify findings against your source system before performing administrative changes.
+        </div>
         <div class="section">
             <div class="section-title">
-                <h2>About Infrastructure Intelligence</h2>
+                <h2>About & Site Info</h2>
             </div>
             <div style="padding: 20px;">
-                <div class="about-box">
-                    <h3>Infrastructure Intelligence Platform</h3>
-                    <p>Infra Intel provides unified operational visibility across hybrid cloud and network security configurations by correlating multi-vendor infrastructure data into a single search platform.</p>
-                    
-                    <h4>Key Features & Capabilities</h4>
-                    <ul>
-                        <li><b>Unified Search:</b> Instantly query across Palo Alto PAN-OS policies, AWS Security Groups, VPCs, ENIs, and Route53 DNS.</li>
-                        <li><b>Intelligent Correlation:</b> Automatically calculates CIDR overlaps and relates attached security policies across platforms.</li>
-                        <li><b>Topology Visualization:</b> Explore AWS Organizations and Panorama Device Group trees directly within the UI.</li>
-                        <li><b>Local SQLite Indexing:</b> Powered by SQLite FTS5 for high-performance, zero-latency local investigations.</li>
-                    </ul>
-
-                    <p style="margin-top: 20px; font-size: 13px; color: var(--text-secondary);">
-                        Version 1.2.0 • Python Flask backend with dynamic SQLite ingestion.
-                    </p>
-                </div>
+                <table class="prop-table">
+                    <tr><th>Site Name</th><td>PerDef Security Orchestrator</td></tr>
+                    <tr><th>Version</th><td>v.01 (beta)</td></tr>
+                    <tr><th>Owner</th><td>PerDef Team</td></tr>
+                </table>
             </div>
         </div>
     </div>
@@ -1156,7 +1185,7 @@ function setSummary(s) {
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
             <div class="card palo-card"><b>${s.palo_objects}</b><span>Palo Alto Objects & Groups</span></div>
             <div class="card palo-card"><b>${s.palo_rules}</b><span>Palo Alto Security & NAT Rules</span></div>
-            <div class="card" style="border-color:#475569;"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
+            <div class="card" style="border-color:#fbc600;"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
         </div>
     `;
 }
@@ -1396,7 +1425,7 @@ function render(data) {
         html += `
             <div class="section" style="border-style: dashed;">
                 <details>
-                    <summary style="padding: 16px; font-size: 14px; background: #1f2937;">
+                    <summary style="padding: 16px; font-size: 14px; background: var(--bg-main);">
                         📄 Parsed Full Collections (all_entries.json Files) — <b>${data.all_entries_matches.length} items hidden</b>
                     </summary>
                     <div>
