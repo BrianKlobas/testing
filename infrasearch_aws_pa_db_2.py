@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Infrastructure Intelligence GUI (Left-Sidebar Unified Dashboard)
+PerDef Security Orchestrator GUI (Left-Sidebar Unified Dashboard)
 ------------------------------------------------------------
 Tabs:
   1. Search & Investigation
@@ -569,19 +569,24 @@ HTML = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Infrastructure Intelligence — Dashboard</title>
+<title>PerDef Security Orchestrator — Dashboard</title>
 <style>
 :root {
-    --bg-main: #090d16;
-    --bg-surface: #0f172a;
-    --bg-card: #1e293b;
-    --border-color: #334155;
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --accent: #3b82f6;
-    --accent-hover: #2563eb;
-    --palo-orange: #ff6b00;
-    --code-bg: #090d16;
+    --dark-gray: #3b3c43;
+    --gold: #fbc600;
+    --medium-gray: #94969a;
+    --light-gray: #e0eae8;
+    
+    --bg-main: #2b2c32;
+    --bg-surface: var(--dark-gray);
+    --bg-card: #45464f;
+    --border-color: var(--gold);
+    --text-primary: var(--light-gray);
+    --text-secondary: var(--medium-gray);
+    --accent: var(--gold);
+    --accent-hover: #d4a700;
+    --palo-orange: var(--gold);
+    --code-bg: #2d2e34;
     --sidebar-width: 260px;
 }
 
@@ -615,11 +620,11 @@ body {
     border-bottom: 1px solid var(--border-color);
 }
 .logo {
-    width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #1d4ed8);
-    display: grid; place-items: center; font-weight: bold; font-size: 15px; color: white;
+    width: 36px; height: 36px; border-radius: 8px; background: var(--gold);
+    display: grid; place-items: center; font-weight: bold; font-size: 18px; color: var(--dark-gray);
 }
-.brand h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.5px; }
-.brand small { color: var(--text-secondary); font-size: 11px; }
+.brand h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.5px; color: var(--light-gray); }
+.brand small { color: var(--medium-gray); font-size: 11px; }
 
 .nav-menu {
     display: flex;
@@ -645,8 +650,8 @@ body {
     gap: 10px;
 }
 
-.tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
-.tab-btn.active { color: #ffffff; background: var(--accent); }
+.tab-btn:hover { color: var(--text-primary); background: rgba(251, 198, 0, 0.1); }
+.tab-btn.active { color: var(--dark-gray); background: var(--gold); }
 
 .sidebar-footer {
     padding: 16px;
@@ -666,9 +671,9 @@ body {
 .tab-content.active { display: block; }
 
 .beta-banner {
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid #d97706;
-    color: #fef3c7;
+    background: rgba(251, 198, 0, 0.15);
+    border: 1px solid var(--gold);
+    color: var(--gold);
     padding: 10px 16px;
     border-radius: 8px;
     font-size: 13px;
@@ -699,10 +704,10 @@ input, button {
     background: var(--bg-main);
     color: var(--text-primary);
 }
-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25); }
-button { background: var(--accent); color: white; border: 0; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(251, 198, 0, 0.25); }
+button { background: var(--gold); color: var(--dark-gray); border: 0; font-weight: 600; cursor: pointer; transition: background 0.2s; }
 button:hover { background: var(--accent-hover); }
-button.secondary { background: #334155; color: var(--text-primary); }
+button.secondary { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); }
 
 .hint { color: var(--text-secondary); font-size: 13px; margin-top: 10px; }
 
@@ -719,8 +724,8 @@ button.secondary { background: #334155; color: var(--text-primary); }
     border-radius: 10px;
     border: 1px solid var(--border-color);
 }
-.card b { display: block; font-size: 24px; color: var(--accent); font-weight: 700; }
-.card.palo-card b { color: var(--palo-orange); }
+.card b { display: block; font-size: 24px; color: var(--gold); font-weight: 700; }
+.card.palo-card b { color: var(--gold); }
 .card span { color: var(--text-secondary); font-size: 11px; margin-top: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }
 
 .status-grid {
@@ -752,7 +757,7 @@ button.secondary { background: #334155; color: var(--text-primary); }
     font-weight: 700;
     text-transform: uppercase;
 }
-.status-pill.success { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #059669; }
+.status-pill.success { background: rgba(251, 198, 0, 0.2); color: var(--gold); border: 1px solid var(--gold); }
 
 .section {
     background: var(--bg-surface);
@@ -768,10 +773,10 @@ button.secondary { background: #334155; color: var(--text-primary); }
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #141e33;
+    background: #2f3036;
 }
 .section-title h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--text-primary); }
-.count { background: #1e293b; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border: 1px solid var(--border-color); }
+.count { background: var(--bg-card); border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--gold); border: 1px solid var(--border-color); }
 
 .item { border-bottom: 1px solid var(--border-color); padding: 18px; }
 .item:last-child { border-bottom: 0; }
@@ -783,37 +788,38 @@ button.secondary { background: #334155; color: var(--text-primary); }
     flex-wrap: wrap;
     align-items: center;
 }
-.item-name { font-weight: 700; font-size: 15px; color: #ffffff; }
+.item-name { font-weight: 700; font-size: 15px; color: var(--light-gray); }
 
 .badge {
     display: inline-block;
-    background: #334155;
-    color: #cbd5e1;
+    background: var(--bg-card);
+    color: var(--light-gray);
     border-radius: 6px;
     padding: 3px 8px;
     margin-left: 6px;
     font-size: 11px;
     font-weight: 600;
+    border: 1px solid var(--medium-gray);
 }
-.badge.blue { background: #1e3a8a; color: #93c5fd; border: 1px solid #1d4ed8; }
-.badge.aws { background: #451a03; color: #fdba74; border: 1px solid #c2410c; }
-.badge.sg { background: #3b0764; color: #d8b4fe; border: 1px solid #7e22ce; }
-.badge.palo { background: rgba(255, 107, 0, 0.15); color: #ff9d5c; border: 1px solid var(--palo-orange); }
+.badge.blue { background: #2f3036; color: var(--gold); border: 1px solid var(--gold); }
+.badge.aws { background: #4a3e1c; color: var(--gold); border: 1px solid var(--gold); }
+.badge.sg { background: #3b3a43; color: var(--light-gray); border: 1px solid var(--medium-gray); }
+.badge.palo { background: rgba(251, 198, 0, 0.15); color: var(--gold); border: 1px solid var(--gold); }
 
 .meta { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
-pre { background: var(--code-bg); color: #e2e8f0; border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
+pre { background: var(--code-bg); color: var(--light-gray); border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
 details { margin-top: 10px; }
-summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
+summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600; }
 
 .prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: var(--bg-card); border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color); }
-.prop-table th { background: #182238; color: var(--text-secondary); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
-.prop-table td { padding: 8px 12px; border-bottom: 1px solid #26334d; color: var(--text-primary); font-family: monospace; word-break: break-all; }
+.prop-table th { background: #2f3036; color: var(--gold); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
+.prop-table td { padding: 8px 12px; border-bottom: 1px solid #4f5058; color: var(--text-primary); font-family: monospace; word-break: break-all; }
 .prop-table tr:last-child td { border-bottom: none; }
 
-.rule-tag { display: inline-block; background: #0f172a; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--border-color); color: #94a3b8; }
-.rule-tag.allow { background: #064e3b; color: #a7f3d0; border-color: #047857; font-weight: bold; }
-.rule-tag.deny { background: #7f1d1d; color: #fecaca; border-color: #991b1b; font-weight: bold; }
-.rule-tag.highlight { background: #1e3a8a; color: #bfdbfe; border-color: #3b82f6; }
+.rule-tag { display: inline-block; background: var(--bg-main); padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--medium-gray); color: var(--text-secondary); }
+.rule-tag.allow { background: rgba(251, 198, 0, 0.2); color: var(--gold); border-color: var(--gold); font-weight: bold; }
+.rule-tag.deny { background: #5a2d2d; color: #fecaca; border-color: #991b1b; font-weight: bold; }
+.rule-tag.highlight { background: var(--bg-card); color: var(--gold); border-color: var(--gold); }
 
 /* 2-Column Info Page Layout */
 .info-grid {
@@ -848,7 +854,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 .link-card h4 { margin: 0 0 6px 0; color: var(--text-primary); font-size: 14px; }
 .link-card p { margin: 0 0 10px 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.4; }
 .link-card a {
-    color: var(--accent);
+    color: var(--gold);
     text-decoration: none;
     font-size: 12.5px;
     font-weight: 600;
@@ -866,12 +872,22 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 .org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
 .tree-node { margin-left: 20px; padding: 4px 0; }
-.tree-folder { color: #60a5fa; font-weight: bold; }
-.tree-leaf { color: #cbd5e1; margin: 2px 0; }
-.switch-link { color: #60a5fa; text-decoration: none; font-weight: 600; }
-.switch-link:hover { text-decoration: underline; color: #93c5fd; }
+.tree-folder { color: var(--gold); font-weight: bold; }
+.tree-leaf { color: var(--light-gray); margin: 2px 0; }
+.switch-link { color: var(--gold); text-decoration: none; font-weight: 600; }
+.switch-link:hover { text-decoration: underline; color: #ffe680; }
 
 .empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 14px; }
+
+.about-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 10px;
+}
+.about-card h3 { margin: 0 0 8px 0; color: var(--gold); font-size: 16px; }
+.about-card p { margin: 4px 0; font-size: 13px; color: var(--text-primary); }
 </style>
 </head>
 
@@ -879,9 +895,9 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
 
 <div class="sidebar">
     <div class="brand">
-        <div class="logo">II</div>
+        <div class="logo">🔒</div>
         <div>
-            <h1>Infra Intel</h1>
+            <h1>PerDef Security Orchestrator</h1>
             <small>Unified Security Dashboard</small>
         </div>
     </div>
@@ -893,6 +909,7 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         <button class="tab-btn" onclick="switchTab('automation', this)">⚙️ Automation Results</button>
         <button class="tab-btn" onclick="switchTab('info', this)">ℹ️ Information & Links</button>
         <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
+        <button class="tab-btn" onclick="switchTab('about', this)">ℹ️ About / Site Info</button>
     </div>
 
     <div class="sidebar-footer">
@@ -1133,6 +1150,25 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
         </div>
     </div>
 
+    <div id="tab-about" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>About / Site Information</h2>
+            </div>
+            <div style="padding: 20px;">
+                <div class="beta-banner">
+                    ⚠️ <b>Early Beta Warning:</b> This search tool is currently in early preview. Always manually double-check and verify findings against your source system before performing administrative changes.
+                </div>
+                
+                <div class="about-card">
+                    <h3>PerDef Security Orchestrator</h3>
+                    <p><b>Version:</b> v.01 (beta)</p>
+                    <p><b>Owner:</b> PerDef Team</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
 </div>
 
 <script>
@@ -1163,7 +1199,7 @@ function setSummary(s) {
             <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
             <div class="card palo-card"><b>${s.palo_objects}</b><span>Palo Alto Objects & Groups</span></div>
             <div class="card palo-card"><b>${s.palo_rules}</b><span>Palo Alto Security & NAT Rules</span></div>
-            <div class="card" style="border-color:#475569;"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
+            <div class="card" style="border-color:var(--border-color);"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
         </div>
     `;
 }
@@ -1403,7 +1439,7 @@ function render(data) {
         html += `
             <div class="section" style="border-style: dashed;">
                 <details>
-                    <summary style="padding: 16px; font-size: 14px; background: #141e33;">
+                    <summary style="padding: 16px; font-size: 14px; background: #2f3036;">
                         📄 Parsed Full Collections (all_entries.json Files) — <b>${data.all_entries_matches.length} items hidden</b>
                     </summary>
                     <div>
