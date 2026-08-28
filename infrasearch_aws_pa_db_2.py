@@ -1,4 +1,4 @@
-#!/usrbin/env python3
+#!/usr/bin/env python3
 """
 PerDef Security Orchestrator (Left-Sidebar Unified Dashboard)
 ------------------------------------------------------------
@@ -146,7 +146,10 @@ def init_db(db_file: Path | None = None):
     if db_file is None:
         db_file = DB_PATH
     if db_file.exists():
-        db_file.unlink()
+        try:
+            db_file.unlink()
+        except OSError:
+            pass
         
     conn = get_db(db_file)
     cursor = conn.cursor()
@@ -172,7 +175,7 @@ def init_db(db_file: Path | None = None):
             name, data, content='records', content_rowid='id'
         );
 
-        CREATE TRIGGER records_ai AFTER INSERT ON records BEGIN
+        CREATE TRIGGER IF NOT EXISTS records_ai AFTER INSERT ON records BEGIN
             INSERT INTO records_fts(rowid, name, data) VALUES (new.id, new.name, new.data);
         END;
     """)
@@ -256,7 +259,7 @@ def ingest_data(fw_root: Path, aws_root: Path, db_file: Path | None = None):
                     continue
                 
                 name = ""
-                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name", "Id"):
+                for name_key in ("VpcId", "SubnetId", "NetworkInterfaceId", "LoadBalancerArn", "LoadBalancerName", "InstanceId", "DBInstanceId", "GroupId", "Id", "Name"):
                     if item.get(name_key):
                         name = str(item[name_key])
                         if "arn:aws:" in name:
@@ -1018,35 +1021,50 @@ summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 6
             <div style="padding: 20px;">
                 <div class="info-grid">
                     <div>
-                        <div class="link-column-title">🛠️ System & Tool Portals</div>
+                        <div class="link-column-title">🛠️ System & Security Portals</div>
                         <div class="link-card">
-                            <h4>Splunk Enterprise Log Management</h4>
-                            <p>Centralized SIEM log search, firewall traffic analysis, and SOC alerts.</p>
-                            <a href="#" onclick="alert('Configure internal Splunk URL in script.'); return false;">Open Splunk &rarr;</a>
+                            <h4>Splunk Enterprise SIEM</h4>
+                            <p>Centralized log search, firewall traffic analysis, and SOC alert correlation.</p>
+                            <a href="#" onclick="alert('Configure Splunk URL in script.'); return false;">Open Splunk Console &rarr;</a>
                         </div>
                         <div class="link-card">
                             <h4>AWS Management Console</h4>
-                            <p>Direct SSO portal access for cloud tenant administration and EC2 management.</p>
+                            <p>Direct SSO portal access for cloud tenant administration, IAM, and EC2 management.</p>
                             <a href="https://aws.amazon.com/console/" target="_blank">Open AWS Console &rarr;</a>
                         </div>
                         <div class="link-card">
                             <h4>Palo Alto Panorama Portal</h4>
                             <p>Centralized firewall policy manager, security profile configuration, and rule inspection.</p>
-                            <a href="#" onclick="alert('Configure Panorama URL in script.'); return false;">Open Panorama &rarr;</a>
+                            <a href="#" onclick="alert('Configure Panorama URL in script.'); return false;">Open Panorama Portal &rarr;</a>
+                        </div>
+                        <div class="link-card">
+                            <h4>Wiz Security Platform</h4>
+                            <p>Cloud Security Posture Management (CSPM) and vulnerability assessment dashboard.</p>
+                            <a href="#" onclick="alert('Configure Wiz Portal URL in script.'); return false;">Open Wiz Dashboard &rarr;</a>
                         </div>
                     </div>
 
                     <div>
-                        <div class="link-column-title">📚 General & Information Links</div>
+                        <div class="link-column-title">📚 Documentation & IT Resources</div>
                         <div class="link-card">
                             <h4>ServiceNow Portal</h4>
-                            <p>Enterprise IT Service Management for submitting security requests and incidents.</p>
+                            <p>Enterprise IT Service Management for submitting security requests, change management, and incidents.</p>
                             <a href="#" onclick="alert('Configure ServiceNow link.'); return false;">Open ServiceNow &rarr;</a>
                         </div>
                         <div class="link-card">
+                            <h4>Corporate Wiki & Knowledge Base</h4>
+                            <p>Internal standard operating procedures, network topology diagrams, and team contacts.</p>
+                            <a href="#" onclick="alert('Configure Wiki URL in script.'); return false;">Open Knowledge Base &rarr;</a>
+                        </div>
+                        <div class="link-card">
                             <h4>Security Standards & Compliance</h4>
-                            <p>Corporate baseline security policies, hardening standards, and governance rules.</p>
+                            <p>Corporate baseline security policies, hardening standards, and cloud governance rules.</p>
                             <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Security Standards &rarr;</a>
+                        </div>
+                        <div class="link-card">
+                            <h4>IP Address Management (IPAM)</h4>
+                            <p>Centralized registry for IP subnet allocations, public IP assignments, and VLANs.</p>
+                            <a href="#" onclick="alert('Configure IPAM link in script.'); return false;">Open IPAM Portal &rarr;</a>
                         </div>
                     </div>
                 </div>
