@@ -469,15 +469,11 @@ class InfrastructureDataSource:
             if "all_entries" in filename or "all_entries" in cat:
                 output["all_entries_matches"].append(rec)
             elif "rule" in cat or "policy" in cat or "nat" in cat:
-                if not any(r["name"] == rec["name"] and r["device"] == rec["device"] for r in output["matched_rules"]):
-                    output["matched_rules"].append(rec)
+                output["matched_rules"].append(rec)
             else:
-                if not any(o["name"] == rec["name"] and o["device"] == rec["device"] for o in output["matched_objects"]):
-                    output["matched_objects"].append(rec)
+                output["matched_objects"].append(rec)
 
-        if query_network or related_cidrs_to_match:
-            active_cidrs = related_cidrs_to_match if related_cidrs_to_match else {query_network.compressed}
-            
+        if related_cidrs_to_match:
             for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
@@ -491,8 +487,14 @@ class InfrastructureDataSource:
                             targets.append(v)
                         elif isinstance(v, list):
                             targets.extend([str(x) for x in v if isinstance(x, str)])
+                        elif isinstance(v, dict):
+                            mem = v.get("member")
+                            if isinstance(mem, str):
+                                targets.append(mem)
+                            elif isinstance(mem, list):
+                                targets.extend([str(x) for x in mem if isinstance(x, str)])
 
-                for cidr in active_cidrs:
+                for cidr in related_cidrs_to_match:
                     for target in targets:
                         if target and sqlite_ip_contains(cidr, target):
                             is_match = True
@@ -502,55 +504,32 @@ class InfrastructureDataSource:
 
                 if is_match:
                     matched_panos_ids.add(row["id"])
-                    obj_name = row["name"] or eval_obj.get("@name") or ""
+                    obj_name = row["name"] or item_data.get("name") or (eval_obj.get("@name") if isinstance(eval_obj, dict) else "")
                     if obj_name:
                         matched_object_names.add(str(obj_name))
                     classify_and_append_panos(row, item_data)
 
-            all_resolved_references = set(matched_object_names)
-            expanded = True
-            while expanded:
-                expanded = False
+            expanded_new_names = True
+            while expanded_new_names:
+                expanded_new_names = False
                 for row in all_panos_records:
                     if row["id"] in matched_panos_ids:
                         continue
-                    item_data = json.loads(row["data"])
-                    eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
-                    
-                    members = []
-                    for k in ("static", "members", "member"):
-                        v = eval_obj.get(k)
-                        if isinstance(v, str):
-                            members.append(v)
-                        elif isinstance(v, list):
-                            members.extend([str(x) for x in v if isinstance(x, str)])
-                        elif isinstance(v, dict):
-                            mem = v.get("member")
-                            if isinstance(mem, str):
-                                members.append(mem)
-                            elif isinstance(mem, list):
-                                members.extend([str(x) for x in mem if isinstance(x, str)])
-                    
-                    if any(m in all_resolved_references for m in members):
-                        matched_panos_ids.add(row["id"])
-                        g_name = row["name"] or eval_obj.get("@name") or ""
-                        if g_name and g_name not in all_resolved_references:
-                            all_resolved_references.add(g_name)
-                            expanded = True
-                        classify_and_append_panos(row, item_data)
 
-            for row in all_panos_records:
-                item_data = json.loads(row["data"])
-                eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
-                cat = str(row["category"]).lower()
-                
-                if "rule" in cat or "policy" in cat or "nat" in cat:
-                    rule_sources = [str(x) for x in extractValues(findKeyRecursively(eval_obj, ['source']))]
-                    rule_dests = [str(x) for x in extractValues(findKeyRecursively(eval_obj, ['destination', 'dest']))]
-                    
-                    if any(ref in all_resolved_references for ref in rule_sources + rule_dests):
-                        matched_panos_ids.add(row["id"])
-                        classify_and_append_panos(row, item_data)
+                    item_data = json.loads(row["data"])
+                    data_str = json.dumps(item_data)
+
+                    for name in list(matched_object_names):
+                        if re.search(r'\b' + re.escape(name) + r'\b', data_str):
+                            matched_panos_ids.add(row["id"])
+                            eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+                            obj_name = row["name"] or (eval_obj.get("@name") if isinstance(eval_obj, dict) else "")
+                            if obj_name and str(obj_name) not in matched_object_names:
+                                matched_object_names.add(str(obj_name))
+                                expanded_new_names = True
+                            classify_and_append_panos(row, item_data)
+                            break
+
         else:
             clean_q = re.sub(r'[^a-zA-Z0-9_\-\.]', ' ', query).strip()
             if clean_q:
@@ -894,9 +873,15 @@ summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600
 }
 
 .org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
-.tree-node { margin-left: 20px; padding: 4px 0; }
-.tree-folder { color: var(--gold); font-weight: bold; }
-.tree-leaf { color: var(--light-gray); margin: 2px 0; }
+.tree-node { margin: 8px 0; }
+.tree-folder { font-weight: bold; color: var(--text-primary); padding: 6px 0; display: inline-block; }
+.tree-leaf {
+    background: var(--bg-card);
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin: 6px 0;
+    border: 1px solid var(--border-color);
+}
 .switch-link { color: var(--gold); text-decoration: none; font-weight: 600; }
 .switch-link:hover { text-decoration: underline; color: #ffe680; }
 
@@ -1610,18 +1595,99 @@ async function loadOrgTopology() {
     }
 }
 
+function buildPanTreeHTML(node) {
+    if (!node) return '';
+    let html = '';
+    
+    const groupName = node.Name || node.DeviceGroupName || node.TemplateGroupName || node.name || 'Group';
+    const groupType = node.Type || node.GroupType || (node.TemplateGroups ? 'Device Group' : 'Group');
+    const templateGroups = node.TemplateGroups || node.template_groups || [];
+    const firewalls = node.Firewalls || node.Devices || node.firewalls || [];
+
+    html += `<div class="tree-node">`;
+    html += `<span class="tree-folder">📁 ${esc(groupName)} <span class="badge blue">${esc(groupType)}</span></span>`;
+
+    if (templateGroups.length > 0) {
+        html += `<div style="margin-left: 20px;">`;
+        templateGroups.forEach(tg => {
+            const tgName = tg.Name || tg.TemplateGroupName || tg.name || 'Template Group';
+            const tgFirewalls = tg.Firewalls || tg.Devices || tg.firewalls || [];
+            
+            html += `<div class="tree-node">`;
+            html += `<span class="tree-folder" style="color: var(--gold);">📂 Template Group: ${esc(tgName)}</span>`;
+            
+            if (tgFirewalls.length > 0) {
+                html += `<div style="margin-left: 20px;">`;
+                tgFirewalls.forEach(fw => html += renderFirewallLeaf(fw));
+                html += `</div>`;
+            }
+            html += `</div>`;
+        });
+        html += `</div>`;
+    }
+
+    if (firewalls.length > 0) {
+        html += `<div style="margin-left: 20px;">`;
+        firewalls.forEach(fw => {
+            html += renderFirewallLeaf(fw);
+        });
+        html += `</div>`;
+    }
+
+    const subGroups = node.Groups || node.DeviceGroups || [];
+    if (subGroups.length > 0) {
+        html += `<div style="margin-left: 10px;">`;
+        subGroups.forEach(sub => html += buildPanTreeHTML(sub));
+        html += `</div>`;
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+function renderFirewallLeaf(fw) {
+    const hostname = fw.Hostname || fw.hostname || fw.Name || fw.name || 'Unknown Firewall';
+    const serial = fw.Serial || fw.serial || 'N/A';
+    const description = fw.Description || fw.description || '';
+    const ip = fw.ManagementIP || fw.ip || fw.ManagementIp || fw.MGMT_IP || 'IP not specified';
+
+    return `
+        <div class="tree-leaf">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                <div>
+                    🔥 <b>${esc(hostname)}</b> 
+                    <span style="color: var(--text-secondary); font-size: 11px; margin-left: 6px;">Serial: <b>${esc(serial)}</b></span>
+                </div>
+                <div>
+                    <span class="badge" style="background: #2f3036; color: var(--gold);">IP: ${esc(ip)}</span>
+                </div>
+            </div>
+            ${description ? `<div style="font-size: 11.5px; color: var(--text-secondary); margin-top: 4px;">Description: ${esc(description)}</div>` : ''}
+        </div>
+    `;
+}
+
 async function loadPanTopology() {
     try {
         const r = await fetch("/api/topology/pan");
         const data = await r.json();
         if (data.error) {
             document.getElementById("panTreeView").innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+            document.getElementById("panMeta").textContent = "Error";
             return;
         }
-        document.getElementById("panTreeView").innerHTML = `<pre>${jsonStr(data)}</pre>`;
+        
+        let treeHtml = "";
+        const rootNodes = data.DeviceGroups || data.Groups || (Array.isArray(data) ? data : [data]);
+        rootNodes.forEach(group => {
+            treeHtml += buildPanTreeHTML(group);
+        });
+
+        document.getElementById("panTreeView").innerHTML = treeHtml || `<div class="empty">No Panorama topology hierarchy nodes found.</div>`;
         document.getElementById("panMeta").textContent = "Loaded";
     } catch(e) {
         document.getElementById("panTreeView").innerHTML = `<div class="empty">Unable to render Panorama topology.</div>`;
+        document.getElementById("panMeta").textContent = "Failed";
     }
 }
 
