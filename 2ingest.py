@@ -1,1183 +1,349 @@
-```python
 #!/usr/bin/env python3
-
-"""
-infra_intel/ingest.py
-
-Standalone JSON -> SQLite ingestion.
-
-Run independently whenever the source JSON changes:
-
-    python ingest.py
-
-Optional:
-
-    python ingest.py --reset
-    python ingest.py --firewall-data ./parsed
-    python ingest.py --aws-data ./aws_parsed
-    python ingest.py --db ./infra_intel.db
-"""
-
+"""Ingest the JSON produced by pa_parse.py and aws_resource_collect.py into SQLite."""
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
-from database import (
-    DEFAULT_DB,
-    classify_network,
-    connect,
-    initialize_database,
-)
-
+from database import DEFAULT_DB_PATH, get_db, init_db, ip_hex, network_bounds
 
 BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_FW_DATA_ROOT = BASE_DIR / "parsed"
+DEFAULT_AWS_DATA_ROOT = BASE_DIR / "aws_parsed"
 
-DEFAULT_FIREWALL_DIR = BASE_DIR / "parsed"
-DEFAULT_AWS_DIR = BASE_DIR / "aws_parsed"
+AWS_REF_PATTERNS = {
+    "instance": re.compile(r"^i-[0-9a-z]+$", re.I),
+    "eni": re.compile(r"^eni-[0-9a-z]+$", re.I),
+    "sg": re.compile(r"^sg-[0-9a-z]+$", re.I),
+    "subnet": re.compile(r"^subnet-[0-9a-z]+$", re.I),
+    "vpc": re.compile(r"^vpc-[0-9a-z]+$", re.I),
+}
 
+KEY_REF_TYPES = {
+    "instanceid": "instance",
+    "networkinterfaceid": "eni",
+    "groupid": "sg",
+    "vpcsecuritygroupid": "sg",
+    "subnetid": "subnet",
+    "vpcid": "vpc",
+}
 
-# ============================================================
-# GENERAL HELPERS
-# ============================================================
-
-def json_text(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def normalize_term(value: Any) -> str:
-    return str(value).strip().lower()
-
-
-def insert_record(
-    conn,
-    *,
-    device_id=None,
-    platform="",
-    category="",
-    filename="",
-    name="",
-    data=None,
-) -> int:
-
-    cur = conn.execute(
-        """
-        INSERT INTO records
-        (
-            device_id,
-            platform,
-            category,
-            filename,
-            name,
-            data
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            device_id,
-            platform,
-            category,
-            filename,
-            name,
-            json_text(data if data is not None else {}),
-        ),
-    )
-
-    return cur.lastrowid
+DNS_KEYS = {
+    "name", "dnsname", "privatednsname", "publicdnsname", "fqdn",
+    "recordname", "hostedzonename", "canonicalhostedzonename",
+}
 
 
-def add_term(
-    conn,
-    record_id: int,
-    value: Any,
-    term_type: str,
-):
-    if value is None:
-        return
-
-    if isinstance(value, (dict, list)):
-        return
-
-    value = str(value).strip()
-
-    if not value:
-        return
-
-    conn.execute(
-        """
-        INSERT INTO search_index
-        (
-            record_id,
-            term,
-            term_type,
-            normalized
-        )
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            record_id,
-            value,
-            term_type,
-            normalize_term(value),
-        ),
-    )
+def json_candidates(data: Any) -> list[dict[str, Any]]:
+    """The collectors write arrays of objects; also accept a single object."""
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    return []
 
 
-def add_network(
-    conn,
-    record_id: int,
-    value: Any,
-    context: str,
-    source_field: str,
-):
-    if value is None:
-        return
-
-    value = str(value).strip()
-
-    if not value:
-        return
-
-    info = classify_network(value)
-
-    if info["family"] not in (4, 6):
-        return
-
-    if info["type"].endswith("_range"):
-        network_value = f"{info['start']}-{info['end']}"
-    else:
-        network_value = info["network"]
-
-    conn.execute(
-        """
-        INSERT INTO network_index
-        (
-            record_id,
-            value,
-            family,
-            value_type,
-            context,
-            source_field
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            record_id,
-            network_value,
-            info["family"],
-            info["type"],
-            context,
-            source_field,
-        ),
-    )
+def panos_record_name(item: dict[str, Any]) -> str:
+    # pa_parse.py emits {name, path, object/rule/profile}.
+    for value in (item.get("name"), item.get("@name")):
+        if value:
+            return str(value)
+    for key in ("object", "rule", "profile", "entry"):
+        value = item.get(key)
+        if isinstance(value, dict):
+            name = value.get("name") or value.get("@name")
+            if name:
+                return str(name)
+    return ""
 
 
-def walk_scalars(value: Any, path=""):
-    """
-    Recursively extract scalar JSON values.
+def aws_record_name(item: dict[str, Any]) -> str:
+    # Match the actual describe/list output produced by aws_resource_collect.py.
+    for key in (
+        "InstanceId", "NetworkInterfaceId", "GroupId", "SubnetId", "VpcId",
+        "DBInstanceIdentifier", "DBInstanceId", "LoadBalancerName",
+        "LoadBalancerArn", "HostedZoneId", "Id", "Name",
+    ):
+        if item.get(key):
+            value = str(item[key])
+            return value.split("/")[-1] if value.startswith("arn:") else value
 
-    Used as a generic safety net so arbitrary fields are searchable.
-    """
+    # Route53 zone objects have Name and a nested ResourceRecordSets list.
+    if item.get("Name"):
+        return str(item["Name"])
+    records = item.get("ResourceRecordSets")
+    if isinstance(records, list) and records:
+        first = records[0]
+        if isinstance(first, dict) and first.get("Name"):
+            return str(first["Name"])
 
-    if isinstance(value, dict):
-
-        for key, child in value.items():
-
-            child_path = (
-                f"{path}.{key}"
-                if path
-                else key
-            )
-
-            yield from walk_scalars(
-                child,
-                child_path,
-            )
-
-    elif isinstance(value, list):
-
-        for index, child in enumerate(value):
-
-            child_path = (
-                f"{path}[{index}]"
-            )
-
-            yield from walk_scalars(
-                child,
-                child_path,
-            )
-
-    else:
-        yield path, value
+    return str(item.get("GroupName") or "AWS-Resource")
 
 
-# ============================================================
-# AWS
-# ============================================================
+def walk_scalars(obj: Any, path: str = "$") -> Iterator[tuple[str, str, str]]:
+    """Yield (JSON path, key name, scalar value) for every scalar."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            child_path = f"{path}.{key}"
+            if isinstance(value, (dict, list)):
+                yield from walk_scalars(value, child_path)
+            elif value is not None:
+                yield child_path, str(key), str(value)
+    elif isinstance(obj, list):
+        for i, value in enumerate(obj):
+            child_path = f"{path}[{i}]"
+            if isinstance(value, (dict, list)):
+                yield from walk_scalars(value, child_path)
+            elif value is not None:
+                yield child_path, "", str(value)
 
-def find_first(obj: dict, *keys):
-    for key in keys:
-        if key in obj and obj[key] not in (None, ""):
-            return obj[key]
 
+def classify_ref(key: str, value: str) -> str | None:
+    key_norm = key.replace("-", "_").lower()
+    compact = key_norm.replace("_", "")
+    if key_norm in KEY_REF_TYPES:
+        return KEY_REF_TYPES[key_norm]
+    if compact in KEY_REF_TYPES:
+        return KEY_REF_TYPES[compact]
+
+    for ref_type, pattern in AWS_REF_PATTERNS.items():
+        if pattern.match(value):
+            return ref_type
+
+    if value.startswith("arn:aws:"):
+        return "arn"
+    if key_norm in DNS_KEYS or compact in DNS_KEYS:
+        return "dns"
     return None
 
 
-def extract_sg_ids(obj: dict) -> list[str]:
-    """
-    Extract ONLY directly attached SGs.
+def _network_type(value: str) -> str:
+    if "-" in value and "/" not in value:
+        try:
+            a, b = value.split("-", 1)
+            if ipaddress.ip_address(a.strip()).version == ipaddress.ip_address(b.strip()).version:
+                return "range"
+        except ValueError:
+            pass
+    return "network"
 
-    No inferred SG relationships are added here.
-    """
 
-    found = []
+def index_record(cursor, record_id: int, item: dict[str, Any], record_name: str) -> tuple[int, int, int]:
+    terms: set[tuple[str, str, str, str]] = set()
+    refs: set[tuple[str, str, str]] = set()
+    networks: set[tuple[int, str, str, str, str, str]] = set()
 
-    groups = find_first(
-        obj,
-        "Groups",
-        "SecurityGroups",
-        "security_groups",
+    if record_name:
+        terms.add((record_name, record_name.lower(), "name", "$.name"))
+
+    for json_path, key, raw_value in walk_scalars(item):
+        value = raw_value.strip()
+        if not value or len(value) > 4096:
+            continue
+
+        terms.add((value, value.lower(), "value", json_path))
+
+        ref_type = classify_ref(key, value)
+        if ref_type:
+            refs.add((ref_type, value, json_path))
+
+        bounds = network_bounds(value)
+        if bounds:
+            version, start, end = bounds
+            networks.add((
+                version,
+                ip_hex(start),
+                ip_hex(end),
+                value,
+                _network_type(value),
+                json_path,
+            ))
+
+    cursor.executemany(
+        "INSERT INTO record_terms(record_id,term,term_lower,term_type,json_path) VALUES(?,?,?,?,?)",
+        [(record_id, *x) for x in terms],
     )
-
-    if isinstance(groups, list):
-
-        for group in groups:
-
-            if isinstance(group, str):
-                if group.startswith("sg-"):
-                    found.append(group)
-
-            elif isinstance(group, dict):
-
-                gid = find_first(
-                    group,
-                    "GroupId",
-                    "groupId",
-                    "VpcSecurityGroupId",
-                )
-
-                if gid:
-                    found.append(str(gid))
-
-    return sorted(set(found))
+    cursor.executemany(
+        "INSERT INTO record_refs(record_id,ref_type,ref_value,ref_value_lower,json_path) VALUES(?,?,?,?,?)",
+        [(record_id, ref_type, value, value.lower(), path) for ref_type, value, path in refs],
+    )
+    cursor.executemany(
+        """INSERT INTO record_networks(record_id,version,start_hex,end_hex,value,network_type,json_path)
+           VALUES(?,?,?,?,?,?,?)""",
+        [(record_id, *x) for x in networks],
+    )
+    return len(terms), len(networks), len(refs)
 
 
-def ingest_aws_file(conn, path: Path):
-    print(f"[AWS] {path}")
+def _load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _relative_device_for_pan(path: Path, root: Path) -> str:
+    rel = path.relative_to(root)
+    return rel.parts[0] if len(rel.parts) > 1 else "(root)"
+
+
+def _relative_account_for_aws(path: Path, root: Path) -> str:
+    rel = path.relative_to(root)
+    return rel.parts[0] if rel.parts else "(root)"
+
+
+def ingest_data(
+    fw_root: Path = DEFAULT_FW_DATA_ROOT,
+    aws_root: Path = DEFAULT_AWS_DATA_ROOT,
+    db_file: Path = DEFAULT_DB_PATH,
+    *,
+    reset: bool = True,
+) -> dict[str, int]:
+    fw_root = Path(fw_root).resolve()
+    aws_root = Path(aws_root).resolve()
+    db_file = Path(db_file).resolve()
+
+    init_db(db_file, reset=reset)
+    conn = get_db(db_file)
+    cursor = conn.cursor()
+
+    counts = {
+        "panos_files": 0,
+        "panos_records": 0,
+        "aws_files": 0,
+        "aws_records": 0,
+        "terms": 0,
+        "networks": 0,
+        "refs": 0,
+        "bad_files": 0,
+    }
+    device_cache: dict[str, int] = {}
+
+    def get_device_id(name: str) -> int:
+        if name in device_cache:
+            return device_cache[name]
+        cursor.execute("INSERT OR IGNORE INTO devices(name) VALUES(?)", (name,))
+        row = cursor.execute("SELECT id FROM devices WHERE name=?", (name,)).fetchone()
+        if row is None:
+            raise RuntimeError(f"Unable to create device '{name}'")
+        device_cache[name] = int(row[0])
+        return device_cache[name]
+
+    def insert_record(device_id: int, platform: str, category: str, path: Path, name: str, item: dict[str, Any]) -> None:
+        cursor.execute(
+            "INSERT INTO records(device_id,platform,category,filename,name,data) VALUES(?,?,?,?,?,?)",
+            (device_id, platform, category, path.name, name, json.dumps(item, separators=(",", ":"))),
+        )
+        rid = int(cursor.lastrowid)
+        t, n, r = index_record(cursor, rid, item, name)
+        counts["terms"] += t
+        counts["networks"] += n
+        counts["refs"] += r
 
     try:
-        with path.open(
-            "r",
-            encoding="utf-8",
-        ) as fh:
-            payload = json.load(fh)
-
-    except Exception as exc:
-        print(f"  ERROR: {exc}")
-        return 0
-
-    count = 0
-
-    if isinstance(payload, list):
-        records = payload
-
-    elif isinstance(payload, dict):
-
-        # Most AWS exports are either a list or a wrapper.
-        for key in (
-            "Resources",
-            "resources",
-            "Instances",
-            "instances",
-            "NetworkInterfaces",
-            "network_interfaces",
-            "Data",
-            "data",
-        ):
-            if isinstance(payload.get(key), list):
-                records = payload[key]
-                break
-        else:
-            records = [payload]
-
-    else:
-        records = []
-
-    for item in records:
-
-        if not isinstance(item, dict):
-            continue
-
-        resource_type = str(
-            find_first(
-                item,
-                "ResourceType",
-                "resource_type",
-                "Type",
-                "type",
-            )
-            or ""
-        )
-
-        resource_id = find_first(
-            item,
-            "ResourceId",
-            "resource_id",
-            "Id",
-            "id",
-        )
-
-        instance_id = find_first(
-            item,
-            "InstanceId",
-            "instance_id",
-        )
-
-        eni_id = find_first(
-            item,
-            "NetworkInterfaceId",
-            "NetworkInterface",
-            "eni_id",
-            "EniId",
-        )
-
-        private_ip = find_first(
-            item,
-            "PrivateIpAddress",
-            "PrivateIP",
-            "private_ip",
-            "privateIp",
-        )
-
-        public_ip = find_first(
-            item,
-            "PublicIpAddress",
-            "PublicIP",
-            "public_ip",
-            "publicIp",
-        )
-
-        subnet_id = find_first(
-            item,
-            "SubnetId",
-            "subnet_id",
-        )
-
-        vpc_id = find_first(
-            item,
-            "VpcId",
-            "VPCId",
-            "vpc_id",
-        )
-
-        subnet_cidr = find_first(
-            item,
-            "SubnetCidr",
-            "SubnetCIDR",
-            "SubnetCidrBlock",
-            "subnet_cidr",
-            "subnetCidr",
-        )
-
-        vpc_cidr = find_first(
-            item,
-            "VpcCidr",
-            "VpcCIDR",
-            "VpcCidrBlock",
-            "vpc_cidr",
-            "vpcCidr",
-        )
-
-        account_id = find_first(
-            item,
-            "AccountId",
-            "account_id",
-        )
-
-        account_name = find_first(
-            item,
-            "AccountName",
-            "account_name",
-        )
-
-        region = find_first(
-            item,
-            "Region",
-            "region",
-        )
-
-        display_name = (
-            instance_id
-            or eni_id
-            or resource_id
-            or private_ip
-            or "AWS resource"
-        )
-
-        record_id = insert_record(
-            conn,
-            platform="AWS",
-            category=resource_type or "resource",
-            filename=str(path),
-            name=str(display_name),
-            data=item,
-        )
-
-        # Generic search index
-        for field, value in walk_scalars(item):
-
-            field_lower = field.lower()
-
-            if any(
-                x in field_lower
-                for x in (
-                    "id",
-                    "name",
-                    "dns",
-                    "hostname",
-                    "address",
-                    "arn",
-                    "cidr",
-                    "ip",
-                    "resource",
-                )
-            ):
-                add_term(
-                    conn,
-                    record_id,
-                    value,
-                    field,
-                )
-
-        # Explicit important identifiers
-        for value, kind in (
-            (resource_id, "resource_id"),
-            (instance_id, "instance_id"),
-            (eni_id, "eni_id"),
-            (subnet_id, "subnet_id"),
-            (vpc_id, "vpc_id"),
-            (account_id, "account_id"),
-            (account_name, "account_name"),
-            (region, "region"),
-        ):
-            add_term(
-                conn,
-                record_id,
-                value,
-                kind,
-            )
-
-        for value, field in (
-            (private_ip, "private_ip"),
-            (public_ip, "public_ip"),
-            (subnet_cidr, "subnet_cidr"),
-            (vpc_cidr, "vpc_cidr"),
-        ):
-            add_network(
-                conn,
-                record_id,
-                value,
-                "AWS",
-                field,
-            )
-
-        cur = conn.execute(
-            """
-            INSERT INTO aws_resources
-            (
-                record_id,
-                account_id,
-                account_name,
-                region,
-                resource_type,
-                resource_id,
-                instance_id,
-                eni_id,
-                private_ip,
-                public_ip,
-                subnet_id,
-                vpc_id,
-                subnet_cidr,
-                vpc_cidr
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                record_id,
-                account_id,
-                account_name,
-                region,
-                resource_type,
-                resource_id,
-                instance_id,
-                eni_id,
-                private_ip,
-                public_ip,
-                subnet_id,
-                vpc_id,
-                subnet_cidr,
-                vpc_cidr,
-            ),
-        )
-
-        aws_resource_id = cur.lastrowid
-
-        # DIRECT SG ATTACHMENTS ONLY
-        for sg_id in extract_sg_ids(item):
-
-            conn.execute(
-                """
-                INSERT INTO aws_security_group_attachments
-                (
-                    aws_resource_id,
-                    sg_id,
-                    attachment_type
-                )
-                VALUES (?, ?, ?)
-                """,
-                (
-                    aws_resource_id,
-                    sg_id,
-                    "direct",
-                ),
-            )
-
-            add_term(
-                conn,
-                record_id,
-                sg_id,
-                "direct_security_group",
-            )
-
-        count += 1
-
-    return count
-
-
-def ingest_aws_directory(conn, directory: Path):
-
-    if not directory.exists():
-        print(f"[AWS] Directory does not exist: {directory}")
-        return
-
-    total = 0
-
-    for path in sorted(
-        directory.rglob("*.json")
-    ):
-        total += ingest_aws_file(
-            conn,
-            path,
-        )
-
-    print(f"[AWS] Indexed {total} resources")
-
-
-# ============================================================
-# PAN-OS
-# ============================================================
-
-def find_pan_device(conn, name: str):
-
-    if not name:
-        return None
-
-    cur = conn.execute(
-        """
-        SELECT id
-        FROM devices
-        WHERE name = ?
-        """,
-        (name,),
-    )
-
-    row = cur.fetchone()
-
-    if row:
-        return row["id"]
-
-    cur = conn.execute(
-        """
-        INSERT INTO devices(name)
-        VALUES (?)
-        """,
-        (name,),
-    )
-
-    return cur.lastrowid
-
-
-def pan_object_values(obj: dict) -> list[str]:
-    """
-    Extract likely PAN-OS address object values.
-    """
-
-    values = []
-
-    for key in (
-        "value",
-        "Value",
-        "ip",
-        "IP",
-        "address",
-        "Address",
-        "fqdn",
-        "FQDN",
-        "fqdn_value",
-        "ip-netmask",
-        "ip-range",
-    ):
-
-        value = obj.get(key)
-
-        if isinstance(value, str):
-            values.append(value)
-
-        elif isinstance(value, list):
-            values.extend(
-                str(x)
-                for x in value
-            )
-
-    return values
-
-
-def ingest_pan_file(conn, path: Path):
-
-    print(f"[PAN] {path}")
-
-    try:
-        with path.open(
-            "r",
-            encoding="utf-8",
-        ) as fh:
-            payload = json.load(fh)
-
-    except Exception as exc:
-        print(f"  ERROR: {exc}")
-        return 0
-
-    device_name = (
-        payload.get("device")
-        if isinstance(payload, dict)
-        else None
-    )
-
-    device_name = (
-        device_name
-        or payload.get("hostname")
-        if isinstance(payload, dict)
-        else path.stem
-    )
-
-    device_id = find_pan_device(
-        conn,
-        str(device_name),
-    )
-
-    count = 0
-
-    # --------------------------------------------------------
-    # Address objects
-    # --------------------------------------------------------
-
-    objects = []
-
-    if isinstance(payload, dict):
-
-        for key in (
-            "objects",
-            "address_objects",
-            "addressObjects",
-            "addresses",
-        ):
-
-            candidate = payload.get(key)
-
-            if isinstance(candidate, list):
-                objects.extend(candidate)
-
-            elif isinstance(candidate, dict):
-                for name, value in candidate.items():
-
-                    if isinstance(value, dict):
-                        obj = dict(value)
-                        obj.setdefault(
-                            "name",
-                            name,
-                        )
-                    else:
-                        obj = {
-                            "name": name,
-                            "value": value,
-                        }
-
-                    objects.append(obj)
-
-    for obj in objects:
-
-        if not isinstance(obj, dict):
-            continue
-
-        name = (
-            obj.get("name")
-            or obj.get("Name")
-            or obj.get("object_name")
-        )
-
-        if not name:
-            continue
-
-        values = pan_object_values(obj)
-
-        record_id = insert_record(
-            conn,
-            device_id=device_id,
-            platform="PAN-OS",
-            category="address_object",
-            filename=str(path),
-            name=str(name),
-            data=obj,
-        )
-
-        add_term(
-            conn,
-            record_id,
-            name,
-            "palo_object",
-        )
-
-        for value in values:
-
-            add_term(
-                conn,
-                record_id,
-                value,
-                "palo_object_value",
-            )
-
-            add_network(
-                conn,
-                record_id,
-                value,
-                "PAN-OS object",
-                "object_value",
-            )
-
-            conn.execute(
-                """
-                INSERT INTO palo_objects
-                (
-                    record_id,
-                    device_id,
-                    object_type,
-                    name,
-                    value,
-                    description
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record_id,
-                    device_id,
-                    "address",
-                    str(name),
-                    str(value),
-                    obj.get("description")
-                    or obj.get("Description"),
-                ),
-            )
-
-        count += 1
-
-    # --------------------------------------------------------
-    # Object groups
-    # --------------------------------------------------------
-
-    groups = []
-
-    if isinstance(payload, dict):
-
-        for key in (
-            "groups",
-            "address_groups",
-            "addressGroups",
-            "object_groups",
-        ):
-
-            candidate = payload.get(key)
-
-            if isinstance(candidate, list):
-                groups.extend(candidate)
-
-            elif isinstance(candidate, dict):
-
-                for name, value in candidate.items():
-
-                    if isinstance(value, dict):
-                        group = dict(value)
-                        group.setdefault(
-                            "name",
-                            name,
-                        )
-                    else:
-                        group = {
-                            "name": name,
-                            "members": value,
-                        }
-
-                    groups.append(group)
-
-    for group in groups:
-
-        if not isinstance(group, dict):
-            continue
-
-        name = (
-            group.get("name")
-            or group.get("Name")
-        )
-
-        if not name:
-            continue
-
-        members = (
-            group.get("members")
-            or group.get("Members")
-            or group.get("static")
-            or group.get("Static")
-            or []
-        )
-
-        if isinstance(members, str):
-            members = [members]
-
-        record_id = insert_record(
-            conn,
-            device_id=device_id,
-            platform="PAN-OS",
-            category="address_group",
-            filename=str(path),
-            name=str(name),
-            data=group,
-        )
-
-        add_term(
-            conn,
-            record_id,
-            name,
-            "palo_group",
-        )
-
-        for member in members:
-
-            member = str(member)
-
-            add_term(
-                conn,
-                record_id,
-                member,
-                "palo_group_member",
-            )
-
-            conn.execute(
-                """
-                INSERT INTO palo_group_members
-                (
-                    group_record_id,
-                    group_name,
-                    member_name,
-                    member_type
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    record_id,
-                    str(name),
-                    member,
-                    "static",
-                ),
-            )
-
-        count += 1
-
-    # --------------------------------------------------------
-    # Security policies
-    # --------------------------------------------------------
-
-    rules = []
-
-    if isinstance(payload, dict):
-
-        for key in (
-            "rules",
-            "security_rules",
-            "securityRules",
-            "policies",
-        ):
-
-            candidate = payload.get(key)
-
-            if isinstance(candidate, list):
-                rules.extend(candidate)
-
-    for rule in rules:
-
-        if not isinstance(rule, dict):
-            continue
-
-        name = (
-            rule.get("name")
-            or rule.get("Name")
-            or rule.get("rule_name")
-            or "Unnamed Rule"
-        )
-
-        source = (
-            rule.get("source")
-            or rule.get("Source")
-            or rule.get("src")
-            or []
-        )
-
-        destination = (
-            rule.get("destination")
-            or rule.get("Destination")
-            or rule.get("dst")
-            or []
-        )
-
-        service = (
-            rule.get("service")
-            or rule.get("Service")
-            or []
-        )
-
-        application = (
-            rule.get("application")
-            or rule.get("Application")
-            or []
-        )
-
-        action = (
-            rule.get("action")
-            or rule.get("Action")
-            or ""
-        )
-
-        if isinstance(source, str):
-            source = [source]
-
-        if isinstance(destination, str):
-            destination = [destination]
-
-        if isinstance(service, str):
-            service = [service]
-
-        if isinstance(application, str):
-            application = [application]
-
-        record_id = insert_record(
-            conn,
-            device_id=device_id,
-            platform="PAN-OS",
-            category="security_rule",
-            filename=str(path),
-            name=str(name),
-            data=rule,
-        )
-
-        add_term(
-            conn,
-            record_id,
-            name,
-            "palo_rule",
-        )
-
-        for value in source:
-            add_term(
-                conn,
-                record_id,
-                value,
-                "rule_source",
-            )
-
-            add_network(
-                conn,
-                record_id,
-                value,
-                "PAN-OS rule source",
-                "source",
-            )
-
-        for value in destination:
-            add_term(
-                conn,
-                record_id,
-                value,
-                "rule_destination",
-            )
-
-            add_network(
-                conn,
-                record_id,
-                value,
-                "PAN-OS rule destination",
-                "destination",
-            )
-
-        for value in service:
-            add_term(
-                conn,
-                record_id,
-                value,
-                "rule_service",
-            )
-
-        for value in application:
-            add_term(
-                conn,
-                record_id,
-                value,
-                "rule_application",
-            )
-
-        conn.execute(
-            """
-            INSERT INTO palo_rules
-            (
-                record_id,
-                device_id,
-                rule_name,
-                rule_type,
-                source,
-                destination,
-                service,
-                application,
-                action,
-                disabled,
-                description
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                record_id,
-                device_id,
-                str(name),
-                "security",
-                json_text(source),
-                json_text(destination),
-                json_text(service),
-                json_text(application),
-                str(action),
-                int(
-                    bool(
-                        rule.get("disabled")
-                        or rule.get("Disabled")
-                    )
-                ),
-                rule.get("description")
-                or rule.get("Description"),
-            ),
-        )
-
-        count += 1
-
-    return count
-
-
-def ingest_pan_directory(conn, directory: Path):
-
-    if not directory.exists():
-        print(f"[PAN] Directory does not exist: {directory}")
-        return
-
-    total = 0
-
-    for path in sorted(
-        directory.rglob("*.json")
-    ):
-        total += ingest_pan_file(
-            conn,
-            path,
-        )
-
-    print(f"[PAN] Indexed {total} records")
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
-    parser = argparse.ArgumentParser(
-        description="Build infra_intel SQLite database."
-    )
-
-    parser.add_argument(
-        "--db",
-        default=str(DEFAULT_DB),
-    )
-
-    parser.add_argument(
-        "--firewall-data",
-        default=str(DEFAULT_FIREWALL_DIR),
-    )
-
-    parser.add_argument(
-        "--aws-data",
-        default=str(DEFAULT_AWS_DIR),
-    )
-
-    parser.add_argument(
-        "--reset",
-        action="store_true",
-        help="Delete and completely rebuild the database.",
-    )
-
-    args = parser.parse_args()
-
-    db_path = Path(args.db)
-
-    initialize_database(
-        db_path,
-        reset=args.reset,
-    )
-
-    conn = connect(db_path)
-
-    try:
-
-        ingest_pan_directory(
-            conn,
-            Path(args.firewall_data),
-        )
-
-        ingest_aws_directory(
-            conn,
-            Path(args.aws_data),
-        )
+        cursor.execute("BEGIN")
+
+        # ------------------------------------------------------------
+        # PAN-OS JSON generated by pa_parse.py
+        # parsed/<device>/<object_type>.json
+        # ------------------------------------------------------------
+        if fw_root.exists():
+            for path in sorted(fw_root.rglob("*.json")):
+                if not path.is_file():
+                    continue
+                try:
+                    data = _load_json(path)
+                except Exception as exc:
+                    counts["bad_files"] += 1
+                    print(f"[!] PAN JSON skipped: {path} ({exc})")
+                    continue
+
+                candidates = json_candidates(data)
+                counts["panos_files"] += 1
+                rel = path.relative_to(fw_root)
+                device = _relative_device_for_pan(path, fw_root)
+                dev_id = get_device_id(device)
+                category = path.stem.replace("-", "_").lower()
+
+                for item in candidates:
+                    insert_record(dev_id, "panos", category, path, panos_record_name(item), item)
+                    counts["panos_records"] += 1
+
+                if not candidates:
+                    print(f"[!] PAN JSON contains no object records: {path} (relative: {rel})")
+
+        # ------------------------------------------------------------
+        # AWS JSON generated by aws_resource_collect.py
+        # aws_parsed/<account>/<region-or-global>/<type>.json
+        # ------------------------------------------------------------
+        if aws_root.exists():
+            for path in sorted(aws_root.rglob("*.json")):
+                if not path.is_file():
+                    continue
+                try:
+                    data = _load_json(path)
+                except Exception as exc:
+                    counts["bad_files"] += 1
+                    print(f"[!] AWS JSON skipped: {path} ({exc})")
+                    continue
+
+                candidates = json_candidates(data)
+                counts["aws_files"] += 1
+                account = _relative_account_for_aws(path, aws_root)
+                dev_id = get_device_id(f"AWS: {account}")
+                category = path.stem.replace("-", "_").lower()
+
+                for item in candidates:
+                    insert_record(dev_id, "aws", category, path, aws_record_name(item), item)
+                    counts["aws_records"] += 1
+
+                if not candidates:
+                    print(f"[!] AWS JSON contains no object records: {path}")
 
         conn.commit()
-
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
+    return counts
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Infrastructure Intelligence JSON -> SQLite ingest")
+    parser.add_argument("--firewall-data", default=str(DEFAULT_FW_DATA_ROOT), help="Root produced by pa_parse.py")
+    parser.add_argument("--aws-data", default=str(DEFAULT_AWS_DATA_ROOT), help="Root produced by aws_resource_collect.py")
+    parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
+    parser.add_argument("--no-reset", action="store_true", help="Append to the DB (normally use a full rebuild)")
+    args = parser.parse_args()
+
+    fw = Path(args.firewall_data)
+    aws = Path(args.aws_data)
+    db = Path(args.db)
+
+    print("=" * 72)
+    print("INFRASTRUCTURE INTELLIGENCE - JSON -> SQLITE INGEST")
+    print("=" * 72)
+    print(f"PAN JSON : {fw.resolve()} {'[FOUND]' if fw.exists() else '[NOT FOUND]'}")
+    print(f"AWS JSON : {aws.resolve()} {'[FOUND]' if aws.exists() else '[NOT FOUND]'}")
+    print(f"Database : {db.resolve()}")
+    print(f"Mode     : {'append' if args.no_reset else 'FULL REBUILD'}")
     print()
-    print("=" * 60)
-    print("INGEST COMPLETE")
-    print(f"Database: {db_path}")
-    print("=" * 60)
+
+    counts = ingest_data(fw, aws, db, reset=not args.no_reset)
+
+    print("\n" + "-" * 72)
+    print(f"PAN files/records : {counts['panos_files']:,} / {counts['panos_records']:,}")
+    print(f"AWS files/records : {counts['aws_files']:,} / {counts['aws_records']:,}")
+    print(f"Indexed terms     : {counts['terms']:,}")
+    print(f"Indexed networks  : {counts['networks']:,}")
+    print(f"Indexed refs      : {counts['refs']:,}")
+    print(f"Bad JSON files    : {counts['bad_files']:,}")
+    print(f"Database          : {db.resolve()}")
+    print("-" * 72)
 
 
 if __name__ == "__main__":
     main()
-```
