@@ -88,73 +88,97 @@ async function executePolicyLookup() {
         const res = await fetch("/api/policy-lookup?" + params.toString());
         const data = await res.json();
 
-        let html = `<div class="section"><div class="section-title"><h2>Policy Lookup Dynamic Viewer</h2><span class="count">Data Inspector</span></div>`;
+        let html = `<div class="section"><div class="section-title"><h2>Policy Lookup Results</h2><span class="count">Query: ${esc(data.query || 'N/A')}</span></div>`;
         html += `<div style="padding: 16px;">`;
 
-        // Loop through EVERY key present in the JSON response dynamically
-        let totalItemsRendered = 0;
-        
-        for (const [key, value] of Object.entries(data)) {
-            if (key === 'query') continue; // Skip query metadata string
+        // Render helper for clean key-value data cards
+        function renderCustomCard(item) {
+            // Un-nest the inner payload if it exists inside `data`
+            const raw = item.data || item.entry || item;
+            const category = item.category || item.type || 'Object';
             
-            // Normalize value into an array whether it's an array or an object
-            let items = [];
-            if (Array.isArray(value)) {
-                items = value;
-            } else if (value && typeof value === 'object') {
-                items = [value];
-            }
+            // Extract core fields from either raw level or inner nested data
+            const name = item.name || raw.name || raw['@name'] || 'Unnamed Object';
+            const desc = raw.description || item.description || '';
+            const ipNetmask = raw['ip-netmask'] || raw.ip_netmask || raw.ip || '';
+            const ipRange = raw['ip-range'] || raw.ip_range || '';
+            const fqdn = raw.fqdn || '';
+            const members = raw.static || raw.members || raw.member || raw.group || '';
+            const action = raw.action || item.action || '';
 
-            if (items.length > 0) {
-                html += `<h3 style="font-size: 14px; color: var(--gold); margin: 16px 0 8px 0; border-bottom: 1px solid #333; padding-bottom: 4px; text-transform: uppercase;">📂 ${esc(key)} (${items.length})</h3>`;
-                
-                items.forEach((item, idx) => {
-                    totalItemsRendered++;
-                    
-                    // If the item is a raw primitive value (string/number), just display it
-                    if (item === null || typeof item !== 'object') {
-                        html += `<div style="background: #1e1f24; border: 1px solid #333; border-radius: 6px; padding: 10px; margin-bottom: 8px; font-family: monospace; font-size: 13px;">${esc(item)}</div>`;
-                        return;
-                    }
-
-                    // Pull out any fields or names dynamically
-                    const name = item.name || item.rule_name || item.title || item.Id || `Record #${idx + 1}`;
-                    
-                    // Build a dynamic key-value table for whatever properties exist inside this item
-                    let propTable = `<table class="prop-table" style="margin-top: 6px;">`;
-                    for (const [subKey, subVal] of Object.entries(item)) {
-                        if (subVal !== null && subVal !== undefined && subVal !== '') {
-                            let displayVal = subVal;
-                            if (typeof subVal === 'object') {
-                                displayVal = JSON.stringify(subVal, null, 2);
-                            }
-                            propTable += `<tr><th>${esc(subKey)}</th><td>${esc(displayVal)}</td></tr>`;
-                        }
-                    }
-                    propTable += `</table>`;
-
-                    html += `
-                        <div style="background: #1e1f24; border: 1px solid #333; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
-                            <b style="font-size: 14px; color: #fff;">${esc(name)}</b>
-                            ${propTable}
+            let cardHtml = `
+                <div style="background: #1e1f24; border: 1px solid #333; border-radius: 8px; padding: 14px; margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2f3036; padding-bottom: 8px; margin-bottom: 10px;">
+                        <div>
+                            <b style="font-size: 15px; color: #fff;">${esc(name)}</b>
+                            <span class="badge blue" style="margin-left: 8px;">${esc(category)}</span>
                         </div>
-                    `;
-                });
-            }
+                        ${action ? `<span class="rule-tag ${String(action).toLowerCase() === 'allow' ? 'allow' : 'deny'}">${esc(String(action).toUpperCase())}</span>` : ''}
+                    </div>
+            `;
+
+            cardHtml += `<table class="prop-table">`;
+            if (desc) cardHtml += `<tr><th>Description</th><td>${esc(desc)}</td></tr>`;
+            if (ipNetmask) cardHtml += `<tr><th>IP / Subnet</th><td>${renderPillList(ipNetmask)}</td></tr>`;
+            if (ipRange) cardHtml += `<tr><th>IP Range</th><td>${renderPillList(ipRange)}</td></tr>`;
+            if (fqdn) cardHtml += `<tr><th>FQDN</th><td>${renderPillList(fqdn)}</td></tr>`;
+            if (members) cardHtml += `<tr><th>Group Members</th><td>${renderPillList(members)}</td></tr>`;
+
+            // If it's a rule/policy item, display source/destination/service
+            const srcVal = raw.source || raw.from || raw['from-zone'];
+            const dstVal = raw.destination || raw.to || raw['to-zone'];
+            const svcVal = raw.service || raw.port;
+
+            if (srcVal) cardHtml += `<tr><th>Source</th><td>${renderPillList(srcVal)}</td></tr>`;
+            if (dstVal) cardHtml += `<tr><th>Destination</th><td>${renderPillList(dstVal)}</td></tr>`;
+            if (svcVal) cardHtml += `<tr><th>Service / Port</th><td>${renderPillList(svcVal)}</td></tr>`;
+
+            cardHtml += `</table>`;
+
+            // Collapsible drawer for full attributes/details
+            cardHtml += `
+                <details style="margin-top: 8px;">
+                    <summary style="font-size: 11px; color: var(--gold); cursor: pointer;">View Raw Payload Details</summary>
+                    <pre style="margin-top: 6px; font-size: 11px; padding: 8px;">${jsonStr(raw)}</pre>
+                </details>
+            </div>`;
+
+            return cardHtml;
         }
 
-        if (totalItemsRendered === 0) {
-            html += `<div class="empty">The JSON object contained keys, but no parseable records were found inside them.</div>`;
+        // Target sections to render while explicitly ignoring high-noise 'all_entries'
+        const sectionsToRender = [
+            { key: 'rules', title: 'Matching Security Rules' },
+            { key: 'matched_rules', title: 'Matched Security Rules' },
+            { key: 'matched_groups', title: 'Matched Address Groups' },
+            { key: 'matched_objects', title: 'Matched Address Objects' }
+        ];
+
+        let totalRendered = 0;
+
+        sectionsToRender.forEach(sec => {
+            const arr = data[sec.key];
+            if (arr && Array.isArray(arr) && arr.length > 0) {
+                totalRendered += arr.length;
+                html += `<h3 style="font-size: 14px; color: var(--gold); margin: 18px 0 10px 0; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">🛡️ ${esc(sec.title)} (${arr.length})</h3>`;
+                arr.forEach(item => {
+                    html += renderCustomCard(item);
+                });
+            }
+        });
+
+        if (totalRendered === 0) {
+            html += `<div class="empty">No matching rules, groups, or objects found for this query.</div>`;
         }
 
         html += `</div>`;
 
-        // Always display the raw JSON payload at the bottom
+        // Raw JSON tray at the bottom for quick inspection
         html += `
             <div style="padding: 16px; border-top: 1px solid #2f3036; background: #18191d;">
-                <details open>
-                    <summary style="cursor: pointer; color: #94a3b8; font-size: 13px; font-weight: bold;">🔍 View Full Raw JSON Payload</summary>
-                    <pre style="margin-top: 10px; padding: 12px; background: #111; color: #34d399; border-radius: 4px; overflow-x: auto; font-size: 12px;">${jsonStr(data)}</pre>
+                <details>
+                    <summary style="cursor: pointer; color: #94a3b8; font-size: 12px; font-weight: bold;">🔍 View Full Raw JSON Payload</summary>
+                    <pre style="margin-top: 10px; padding: 12px; background: #111; color: #34d399; border-radius: 4px; overflow-x: auto; font-size: 11px;">${jsonStr(data)}</pre>
                 </details>
             </div>
         `;
