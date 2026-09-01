@@ -577,8 +577,8 @@ class InfrastructureDataSource:
         finally:
             conn.close()
             
-def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> list[dict[str, Any]]:
-        """Lookup Palo Alto rules and resolve object groups with inline db diagnostics."""
+    def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> list[dict[str, Any]]:
+        """Lookup Palo Alto security rules and resolve object groups for source, destination, and port."""
         source = source.strip()
         destination = destination.strip()
         port = port.strip()
@@ -588,22 +588,15 @@ def policy_lookup(self, source: str = "", destination: str = "", port: str = "")
         cursor = conn.cursor()
 
         try:
-            # Diagnostic print to verify database table rows and categories
-            cursor.execute("SELECT DISTINCT platform, category, COUNT(*) FROM records GROUP BY platform, category")
-            print("--- DATABASE RECORDS SUMMARY ---")
-            for row in cursor.fetchall():
-                print(f"Platform: {row[0]}, Category: {row[1]}, Count: {row[2]}")
-            print("--------------------------------")
-
             cursor.execute(
                 """
                 SELECT r.id, r.name, r.category, r.data, d.name AS device_name
                 FROM records r JOIN devices d ON r.device_id = d.id
+                WHERE r.platform = 'panos'
                 """
             )
             all_records = cursor.fetchall()
-            print(f"Total records fetched for lookup: {len(all_records)}")
-
+            
             object_map = {}
             rule_records = []
 
@@ -624,11 +617,9 @@ def policy_lookup(self, source: str = "", destination: str = "", port: str = "")
                     if entry_name:
                         object_map[entry_name] = item_data
 
-                # Catch any category containing rules, security, policies, or firewall entries
-                if any(k in cat for k in ["rule", "security", "policy", "firewall"]):
+                # Target the exact panos security_rules category
+                if cat == "security_rules" or "rule" in cat or "security" in cat:
                     rule_records.append((row, item_data))
-
-            print(f"Filtered rule records detected: {len(rule_records)}")
 
             def resolve_object_members(obj_name: str) -> set[str]:
                 members = {obj_name}
