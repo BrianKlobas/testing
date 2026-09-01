@@ -508,17 +508,17 @@ class InfrastructureDataSource:
                                 _classify_panos_record(row, item_data, output)
                                 break
             
-            # Independent text search handler (un-indented so it always runs for text queries)
+            # Independent text search handler (Optimized with explicit rowid index and limit)
             clean_q = _clean_fts_query(query)
             if clean_q and not query_network:
                 cursor.execute(
                     """
                     SELECT r.id, d.name AS device, r.platform, r.category,
                            r.filename, r.name, r.data
-                    FROM records r
+                    FROM records_fts fts
+                    JOIN records r ON r.id = fts.rowid
                     JOIN devices d ON r.device_id = d.id
-                    JOIN records_fts fts ON fts.rowid = r.id
-                    WHERE r.platform = 'panos' AND records_fts MATCH ?
+                    WHERE records_fts MATCH ?
                     LIMIT ?
                     """,
                     (clean_q, limit),
@@ -531,7 +531,16 @@ class InfrastructureDataSource:
                     except json.JSONDecodeError:
                         continue
                     matched_panos_ids.add(row["id"])
-                    _classify_panos_record(row, item_data, output)
+                    if row["platform"] == "panos":
+                        _classify_panos_record(row, item_data, output)
+                    else:
+                        output["aws_matches"].append({
+                            "device": row["device"],
+                            "type": row["category"],
+                            "file": row["filename"],
+                            "name": row["name"],
+                            "data": item_data,
+                        })
 
             output["summary"] = {
                 "aws_resources": len(output["aws_matches"]),
