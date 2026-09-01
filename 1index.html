@@ -1,0 +1,15 @@
+async function investigate() {
+    const q = document.getElementById("query").value.trim();
+    if (!q) return;
+    currentSearchQuery = q;
+    document.getElementById("output").innerHTML = `<div class="empty">Searching indexed database for <b>${esc(q)}</b>...</div>`;
+    try {
+        const res = await fetch("/api/investigate?q=" + encodeURIComponent(q));
+        const data = await res.json();
+        console.log("API Response Data:", data); // Add this line
+        render(data);
+    } catch (err) {
+        console.error("Search error:", err);
+        document.getElementById("output").innerHTML = `<div class="empty" style="color:#f87171;">Error executing search query.</div>`;
+    }
+}
