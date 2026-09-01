@@ -65,3 +65,21 @@ function render(data) {
         </div>
     `;
 }
+
+
+function render(data) {
+    // Force direct text output to prove the function is running
+    const container = document.getElementById("output");
+    if (!container) {
+        alert("Error: #output element not found in HTML!");
+        return;
+    }
+    
+    container.innerHTML = `
+        <div style="background: #111; color: #0f0; padding: 20px; font-family: monospace; border: 2px solid #0f0;">
+            <h3>DEBUG: Render Function Reached!</h3>
+            <p>Raw Data Type: ${typeof data}</p>
+            <pre>${JSON.stringify(data, null, 2)}</pre>
+        </div>
+    `;
+}
