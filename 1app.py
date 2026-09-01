@@ -6,7 +6,6 @@ init_db()
 
 @app.route("/", methods=["GET"])
 def dashboard():
-    # Renders index.html directly from the templates/ directory
     return render_template("index.html")
 
 @app.route("/api/policy-lookup", methods=["GET"])
