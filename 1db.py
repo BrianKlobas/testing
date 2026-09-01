@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 DB_PATH = Path("infra_intel.db")
+DEFAULT_DB_PATH = DB_PATH  # Alias for compatibility with app.py/ingest.py imports
 FW_DATA_ROOT = Path("parsed").resolve()
 AWS_DATA_ROOT = Path("aws_parsed").resolve()
 ORG_FILE_PATH = Path("org_topology.json").resolve()
