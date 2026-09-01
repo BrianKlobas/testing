@@ -88,18 +88,36 @@ async function executePolicyLookup() {
         const res = await fetch("/api/policy-lookup?" + params.toString());
         const data = await res.json();
 
-        // Support both direct array and nested wrappers (e.g. data.rules or data itself)
-        const rules = data.rules || (Array.isArray(data) ? data : (data.matched_rules || []));
+        // Dynamically check multiple possible keys returned by the backend
+        const rules = data.rules || data.matched_rules || data.results || (Array.isArray(data) ? data : []);
 
         if (rules.length > 0) {
             let html = `<div class="section"><div class="section-title"><h2>Matching Rules & Intersections</h2><span class="count">${rules.length} Rules Found</span></div>`;
-            html += rules.map(x => itemHTML(x, "palo")).join("");
+            
+            // Loop and safely catch rendering issues for individual items
+            for (const x of rules) {
+                try {
+                    html += itemHTML(x, "palo");
+                } catch (renderErr) {
+                    html += `<div class="item" style="color: #f87171;">Error rendering item: ${esc(renderErr.message)}<pre>${jsonStr(x)}</pre></div>`;
+                }
+            }
+            
             html += `</div>`;
             document.getElementById("policyLookupOutput").innerHTML = html;
         } else {
-            document.getElementById("policyLookupOutput").innerHTML = `<div class="empty">No intersecting firewall rules found matching the given criteria.</div>`;
+            // If keys don't match, display the raw JSON directly so you can see its layout
+            document.getElementById("policyLookupOutput").innerHTML = `
+                <div class="empty">
+                    <p>Query returned data, but no matching rule array was found.</p>
+                    <details style="margin-top: 10px; text-align: left;">
+                        <summary>View Raw JSON Payload</summary>
+                        <pre>${jsonStr(data)}</pre>
+                    </details>
+                </div>
+            `;
         }
     } catch (err) {
-        document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Error executing policy lookup query.</div>`;
+        document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Error: ${esc(err.message)}</div>`;
     }
 }
