@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 DB_PATH = Path("infra_intel.db")
-DEFAULT_DB_PATH = DB_PATH  # Alias for compatibility with app.py/ingest.py imports
+DEFAULT_DB_PATH = DB_PATH
 FW_DATA_ROOT = Path("parsed").resolve()
 AWS_DATA_ROOT = Path("aws_parsed").resolve()
 ORG_FILE_PATH = Path("org_topology.json").resolve()
@@ -57,6 +57,11 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
             return 1 if target_net.overlaps(fw_net) else 0
         
     return 0
+
+
+def classify_ip_search(val: str) -> str:
+    net = extract_ip_or_cidr(val)
+    return "ip_or_cidr" if net else "text"
 
 
 def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
@@ -253,7 +258,7 @@ class InfrastructureDataSource:
         
         output = {
             "query": query,
-            "query_type": "ip_or_cidr" if query_network else "text",
+            "query_type": classify_ip_search(query),
             "matched_objects": [],
             "matched_rules": [],
             "all_entries_matches": [],
