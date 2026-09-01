@@ -548,7 +548,7 @@ class InfrastructureDataSource:
                 output["matched_rules"].append(rec)
             else:
                 output["matched_objects"].append(rec)
-              
+
         if related_cidrs_to_match:
             def get_panos_targets(obj: Any) -> list[str]:
                 targets = []
@@ -569,26 +569,34 @@ class InfrastructureDataSource:
                 return targets
 
             for row in all_panos_records:
-                item_data = json.loads(row["data"])
-                is_match = False
+                try:
+                    item_data = json.loads(row["data"])
+                except Exception:
+                    continue
                 
-                # Recursively pull targets from any nesting level using known PAN-OS config keys
+                is_match = False
                 targets = get_panos_targets(item_data)
 
                 for cidr in related_cidrs_to_match:
-                    cidr_net = extract_ip_or_cidr(cidr)
-                    for target in targets:
-                        target_net = extract_ip_or_cidr(target)
-                        if cidr_net and target_net:
-                            if cidr_net.version == target_net.version:
-                                if cidr_net.overlaps(target_net) or cidr_net.subnet_of(target_net) or target_net.subnet_of(cidr_net):
+                    try:
+                        cidr_net = extract_ip_or_cidr(cidr)
+                        for target in targets:
+                            try:
+                                target_net = extract_ip_or_cidr(target)
+                                if cidr_net and target_net:
+                                    if cidr_net.version == target_net.version:
+                                        if cidr_net.overlaps(target_net) or cidr_net.subnet_of(target_net) or target_net.subnet_of(cidr_net):
+                                            is_match = True
+                                            break
+                                elif target and sqlite_ip_contains(cidr, target):
                                     is_match = True
                                     break
-                        elif target and sqlite_ip_contains(cidr, target):
-                            is_match = True
+                            except Exception:
+                                continue # Safely skip non-IP object names like group labels
+                        if is_match:
                             break
-                    if is_match:
-                        break
+                    except Exception:
+                        continue
 
                 if is_match:
                     matched_panos_ids.add(row["id"])
