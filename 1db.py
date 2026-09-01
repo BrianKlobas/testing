@@ -120,38 +120,18 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                     (query, limit)
                 )
             else:
-                # Sanitize query and format safely for FTS5 prefix searching
-                clean_query = ''.join(c if c.isalnum() or c.isspace() else ' ' for c in query).strip()
-                terms = clean_query.split()
-                if terms:
-                    fts_query = " ".join([f"{t}*" for t in terms])
-                else:
-                    fts_query = query
-                
-                try:
-                    cursor.execute(
-                        """
-                        SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
-                        FROM records_fts fts
-                        JOIN records r ON fts.rowid = r.id
-                        JOIN devices d ON r.device_id = d.id
-                        WHERE records_fts MATCH ?
-                        LIMIT ?
-                        """,
-                        (fts_query, limit)
-                    )
-                except sqlite3.OperationalError:
-                    # Fallback to standard LIKE search if FTS syntax fails
-                    cursor.execute(
-                        """
-                        SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
-                        FROM records r
-                        JOIN devices d ON r.device_id = d.id
-                        WHERE r.name LIKE ? OR r.data LIKE ?
-                        LIMIT ?
-                        """,
-                        (f"%{query}%", f"%{query}%", limit)
-                    )
+                # Use a reliable wildcard LIKE search across names and raw JSON data
+                search_term = f"%{query}%"
+                cursor.execute(
+                    """
+                    SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
+                    FROM records r
+                    JOIN devices d ON r.device_id = d.id
+                    WHERE r.name LIKE ? OR r.data LIKE ?
+                    LIMIT ?
+                    """,
+                    (search_term, search_term, limit)
+                )
 
             rows = cursor.fetchall()
             for row in rows:
@@ -168,8 +148,6 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
             return {"query": query, "count": len(results), "results": results}
             
         except Exception as e:
-            import traceback
-            traceback.print_exc()  # This will now print the exact error to your terminal!
             return {"error": str(e), "query": query, "count": 0, "results": []}
 
 PANOS = InfrastructureDataSource()
