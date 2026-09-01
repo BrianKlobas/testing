@@ -17,23 +17,40 @@ async function investigate() {
 
 
 function render(data) {
-    // Fall back to empty summary if your backend doesn't return s
-    if (data.summary) {
-        setSummary(data.summary);
+    // Fall back to data itself if "rules" wrapper isn't present
+    const payload = data.rules || data;
+    
+    if (data.summary || payload.summary) {
+        setSummary(data.summary || payload.summary);
     }
     
     let html = "";
-    
-    // Map these keys to match whatever your backend python dictionary actually uses:
-    const awsMatches = data.aws_matches || data.aws || [];
-    const secGroups = data.attached_security_groups || data.security_groups || [];
-    const matchedObjs = data.matched_objects || data.objects || [];
-    const matchedRls = data.matched_rules || data.rules || [];
+    const awsMatches = payload.aws_matches || [];
+    const secGroups = payload.attached_security_groups || [];
+    const matchedObjs = payload.matched_objects || payload.matched_groups || [];
+    const matchedRls = payload.matched_rules || [];
+    const allEntries = payload.all_entries_matches || [];
 
     if (awsMatches.length) html += section("Matching AWS Resources", awsMatches.length, awsMatches.map(x => itemHTML(x, "aws")).join(""));
     if (secGroups.length) html += section("Attached Security Groups", secGroups.length, secGroups.map(x => itemHTML(x, "sg")).join(""));
     if (matchedObjs.length) html += section("Palo Alto Objects & Groups", matchedObjs.length, matchedObjs.map(x => itemHTML(x, "palo")).join(""));
     if (matchedRls.length) html += section("Palo Alto Security Rules & NATs", matchedRls.length, matchedRls.map(x => itemHTML(x, "palo")).join(""));
+    
+    if (allEntries.length > 0) {
+        const allEntriesContent = allEntries.map(x => itemHTML(x, "palo")).join("");
+        html += `
+            <div class="section" style="border-style: dashed;">
+                <details>
+                    <summary style="padding: 16px; font-size: 14px; background: #2f3036;">
+                        📄 Parsed Full Collections (all_entries.json Files) — <b>${allEntries.length} items hidden</b>
+                    </summary>
+                    <div>
+                        ${allEntriesContent}
+                    </div>
+                </details>
+            </div>
+        `;
+    }
 
     if (!html) html = `<div class="empty">No matching records found.</div>`;
     document.getElementById("output").innerHTML = html;
