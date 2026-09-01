@@ -666,7 +666,8 @@ function esc(value) {
 }
 function jsonStr(value) { return esc(JSON.stringify(value, null, 2)); }
 
-function setSummary(s) {
+function setSummary(s, timing = null) {
+    const t = timing && timing.total_ms !== undefined ? `<div class="card"><b>${esc(timing.total_ms)} ms</b><span>Search Time</span></div>` : '';
     document.getElementById("summary").innerHTML = `
         <div class="summary">
             <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
@@ -675,6 +676,7 @@ function setSummary(s) {
             <div class="card palo-card"><b>${s.palo_groups || 0}</b><span>Palo Alto Groups</span></div>
             <div class="card palo-card"><b>${s.palo_rules || 0}</b><span>Palo Alto Security & NAT Rules</span></div>
             <div class="card" style="border-color:var(--border-color);"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
+            ${t}
         </div>
     `;
 }
@@ -972,6 +974,7 @@ function itemHTML(x, badgeClass) {
             </div>
             <div class="meta">Source File: ${esc(x.file || '')}</div>
             ${x.match_reason ? `<div class="meta"><b>Relationship:</b> ${esc(x.match_reason)}${x.matched_value ? ` — ${esc(x.matched_value)}` : ''}</div>` : ''}
+            ${x.decision ? `<div class="meta"><b>Decision:</b> <strong>${esc(x.decision)}</strong> &nbsp; <b>Action:</b> ${esc(x.action || '')}</div>` : ''}
             ${x.attachment_scope ? `<div class="meta"><b>Attachment:</b> ${esc(x.attachment_scope)}</div>` : ''}
             ${x.match_details ? `<div class="meta"><b>Matched by:</b> Source ${esc((x.match_details.source || []).join(', '))} | Destination ${esc((x.match_details.destination || []).join(', '))}${x.match_details.port_query ? ` | Port ${esc(x.match_details.port_query)}` : ''}</div>` : ''}
             ${extraDetails}
@@ -984,7 +987,7 @@ function itemHTML(x, badgeClass) {
 }
 
 function render(data) {
-    setSummary(data.summary);
+    setSummary(data.summary, data.timing);
     let html = "";
     if (data.aws_matches.length) html += section("Matching AWS Resources", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
     if (data.attached_security_groups.length) html += section("Attached Security Groups", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
@@ -1079,6 +1082,7 @@ async function executePolicyLookup() {
             <div class="card palo-card"><b>${data.summary?.rules || 0}</b><span>Matching Rules</span></div>
             <div class="card palo-card"><b>${data.summary?.allow || 0}</b><span>Allow</span></div>
             <div class="card"><b>${data.summary?.deny || 0}</b><span>Deny / Drop</span></div>
+            <div class="card"><b>${esc(data.timing?.total_ms ?? "—")} ms</b><span>Search Time</span></div>
         </div>`;
 
         html += renderPolicyContext("Resolved Source", data.source_context);
