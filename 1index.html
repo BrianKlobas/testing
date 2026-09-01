@@ -53,5 +53,15 @@ function render(data) {
     }
 
     if (!html) html = `<div class="empty">No matching records found.</div>`;
-    document.getElementById("output").innerHTML = html;
+    document.getElementById("output").innerHTML = `
+        <div class="section">
+            <div class="section-title">
+                <h2>Raw API Response Debugger</h2>
+                <span class="count">JSON Payload</span>
+            </div>
+            <div style="padding: 20px;">
+                <pre>${jsonStr(data)}</pre>
+            </div>
+        </div>
+    `;
 }
