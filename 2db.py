@@ -291,7 +291,6 @@ def find_network_record_ids(
     params.append(limit)
     return [int(row[0]) for row in conn.execute(sql, params).fetchall()]
 
-
 def fetch_records_by_ids(conn: sqlite3.Connection, record_ids: Iterable[int]) -> list[sqlite3.Row]:
     ids = list(dict.fromkeys(int(x) for x in record_ids))
     if not ids:
