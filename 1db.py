@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "infra_intel.db"
-
+DB_PATH = DEFAULT_DB_PATH
 
 def parse_ip_network(value: str | None):
     """Parse an IP or CIDR into an IPv4Network/IPv6Network."""
@@ -183,51 +183,63 @@ def get_latest_dir_mtime(dirpath: Path) -> str:
     return "N/A"
 
 
-def get_db(db_file: Path | str | None = None) -> sqlite3.Connection:
-    db_path = Path(db_file) if db_file is not None else DEFAULT_DB_PATH
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(db_path)
+def get_db(db_file: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_file)
     conn.row_factory = sqlite3.Row
-    conn.create_function("IP_CONTAINS", 2, sqlite_ip_contains)
+    
+    # Performance pragmas to eliminate locking and speed up reads/writes
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA cache_size = -64000;")  # Use ~64MB of memory for cache
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    
     return conn
 
 
-def init_db(db_file: Path | str | None = None, reset: bool = False) -> None:
-    """Create the database schema. Set reset=True for a clean full rebuild."""
-    db_path = Path(db_file) if db_file is not None else DEFAULT_DB_PATH
+def init_db(db_file: Path = DEFAULT_DB_PATH, reset: bool = False) -> None:
+    if reset and db_file.exists():
+        db_file.unlink()
 
-    if reset and db_path.exists():
-        db_path.unlink()
+    conn = get_db(db_file)
+    cursor = conn.cursor()
 
-    conn = get_db(db_path)
-    conn.executescript(
-        """
+    cursor.executescript("""
         CREATE TABLE IF NOT EXISTS devices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE
+            name TEXT UNIQUE NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id INTEGER,
-            platform TEXT,
-            category TEXT,
-            filename TEXT,
+            device_id INTEGER NOT NULL,
+            platform TEXT NOT NULL,
+            category TEXT NOT NULL,
+            filename TEXT NOT NULL,
             name TEXT,
-            data TEXT,
-            FOREIGN KEY(device_id) REFERENCES devices(id)
+            data TEXT NOT NULL,
+            FOREIGN KEY (device_id) REFERENCES devices(id)
         );
 
+        CREATE INDEX IF NOT EXISTS idx_records_platform ON records(platform);
+        CREATE INDEX IF NOT EXISTS idx_records_category ON records(category);
+        CREATE INDEX IF NOT EXISTS idx_records_device ON records(device_id);
+
+        -- Use external content FTS5 to keep search blazing fast and lightweight
         CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
-            name, data, content='records', content_rowid='id'
+            name, 
+            data, 
+            content='records', 
+            content_rowid='id'
         );
 
+        -- Triggers to automatically keep FTS index updated during ingest
         CREATE TRIGGER IF NOT EXISTS records_ai AFTER INSERT ON records BEGIN
-            INSERT INTO records_fts(rowid, name, data)
-            VALUES (new.id, new.name, new.data);
+            INSERT INTO records_fts(rowid, name, data) VALUES (new.id, new.name, new.data);
         END;
-        """
-    )
+
+        CREATE TRIGGER IF NOT EXISTS records_ad AFTER DELETE ON records BEGIN
+            INSERT INTO records_fts(records_fts, rowid, name, data) VALUES('delete', old.id, old.name, old.data);
+        END;
+    """)
     conn.commit()
     conn.close()
