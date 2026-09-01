@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SQLite schema and shared matching helpers for Infrastructure Intelligence."""
+"""SQLite storage and high-performance lookup helpers for Infrastructure Intelligence."""
 from __future__ import annotations
 
 import ipaddress
@@ -46,39 +46,25 @@ def classify_ip_search(value: str | None) -> dict[str, Any]:
     raw = str(value or "").strip()
     if not raw:
         return {"type": "empty", "family": None, "value": raw}
-
-    ip_range = parse_ip_range(raw)
-    if ip_range:
-        start, end = ip_range
-        return {
-            "type": "ipv4_range" if start.version == 4 else "ipv6_range",
-            "family": start.version,
-            "value": raw,
-            "start": str(start),
-            "end": str(end),
-        }
-
+    rng = parse_ip_range(raw)
+    if rng:
+        start, end = rng
+        return {"type": "ipv4_range" if start.version == 4 else "ipv6_range", "family": start.version,
+                "value": raw, "start": str(start), "end": str(end)}
     net = parse_ip_network(raw)
     if net:
         if net.prefixlen == net.max_prefixlen:
             kind = "ipv4" if net.version == 4 else "ipv6"
         else:
             kind = "ipv4_cidr" if net.version == 4 else "ipv6_cidr"
-        return {
-            "type": kind,
-            "family": net.version,
-            "value": raw,
-            "network": net.compressed,
-        }
-
+        return {"type": kind, "family": net.version, "value": raw, "network": net.compressed}
     return {"type": "text", "family": None, "value": raw}
 
 
 def network_bounds(value: str | None):
-    """Return (version, first_ip, last_ip) for an IP, CIDR, or inclusive range."""
-    ip_range = parse_ip_range(value)
-    if ip_range:
-        return ip_range[0].version, ip_range[0], ip_range[1]
+    rng = parse_ip_range(value)
+    if rng:
+        return rng[0].version, rng[0], rng[1]
     net = parse_ip_network(value)
     if net:
         return net.version, net.network_address, net.broadcast_address
@@ -86,7 +72,6 @@ def network_bounds(value: str | None):
 
 
 def ip_hex(address: Any) -> str:
-    """Fixed-width hex permits safe lexicographic IPv4/IPv6 range comparisons."""
     return f"{int(address):032x}"
 
 
@@ -99,44 +84,36 @@ def value_matches_network_or_range(left: str | None, right: str | None) -> bool:
 
 
 def sqlite_ip_contains(left: str, right: str) -> int:
-    """SQLite-safe IP/CIDR overlap test; IPv4 and IPv6 never cross-compare."""
     try:
         return int(value_matches_network_or_range(left, right))
     except (ValueError, TypeError):
         return 0
 
 
-def extract_ip_or_cidr(value: str | None):
-    return parse_ip_network(value)
-
-
 def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
-    """Return SGs directly attached to a resource/ENI, not SG rule references."""
-    sg_ids: set[str] = set()
+    """Only SGs actually attached to an AWS resource/ENI; never SG rule references."""
+    result: set[str] = set()
 
     def consume(groups: Any) -> None:
         if not isinstance(groups, list):
             return
         for group in groups:
             if isinstance(group, str) and group.startswith("sg-"):
-                sg_ids.add(group)
+                result.add(group)
             elif isinstance(group, dict):
                 gid = group.get("GroupId") or group.get("VpcSecurityGroupId")
                 if gid and str(gid).startswith("sg-"):
-                    sg_ids.add(str(gid))
+                    result.add(str(gid))
 
     consume(item.get("Groups"))
     consume(item.get("SecurityGroups"))
-
-    # EC2 responses can also contain network interfaces with their own Groups.
     nis = item.get("NetworkInterfaces")
     if isinstance(nis, list):
         for ni in nis:
             if isinstance(ni, dict):
                 consume(ni.get("Groups"))
                 consume(ni.get("SecurityGroups"))
-
-    return sg_ids
+    return result
 
 
 def get_file_modified_time(filepath: Path) -> str:
@@ -155,21 +132,23 @@ def get_latest_dir_mtime(dirpath: Path) -> str:
 def get_db(db_file: Path | str | None = None) -> sqlite3.Connection:
     db_path = Path(db_file) if db_file is not None else DEFAULT_DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=60)
+    conn = sqlite3.connect(db_path, timeout=60, cached_statements=512)
     conn.row_factory = sqlite3.Row
+    # Tuned for a local, read-heavy investigation application.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA cache_size=-64000")
+    conn.execute("PRAGMA cache_size=-262144")  # ~256 MiB page cache
+    conn.execute("PRAGMA mmap_size=1073741824")  # up to 1 GiB memory-mapped DB pages
     conn.execute("PRAGMA temp_store=MEMORY")
-    conn.create_function("IP_CONTAINS", 2, sqlite_ip_contains)
+    conn.execute("PRAGMA busy_timeout=60000")
+    conn.create_function("IP_CONTAINS", 2, sqlite_ip_contains, deterministic=True)
     return conn
 
 
 def init_db(db_file: Path | str | None = None, reset: bool = False) -> None:
     db_path = Path(db_file) if db_file is not None else DEFAULT_DB_PATH
     if reset and db_path.exists():
-        # WAL mode can leave sidecar files behind. SQLite recreates the DB cleanly.
         for suffix in ("", "-wal", "-shm"):
             p = Path(str(db_path) + suffix)
             try:
@@ -194,30 +173,29 @@ def init_db(db_file: Path | str | None = None, reset: bool = False) -> None:
                 category TEXT NOT NULL,
                 filename TEXT NOT NULL,
                 name TEXT,
+                name_lower TEXT,
                 data TEXT NOT NULL,
                 FOREIGN KEY(device_id) REFERENCES devices(id)
             );
-
             CREATE INDEX IF NOT EXISTS idx_records_platform ON records(platform);
             CREATE INDEX IF NOT EXISTS idx_records_category ON records(category);
             CREATE INDEX IF NOT EXISTS idx_records_device ON records(device_id);
-            CREATE INDEX IF NOT EXISTS idx_records_name ON records(name);
+            CREATE INDEX IF NOT EXISTS idx_records_name_lower ON records(name_lower);
+            CREATE INDEX IF NOT EXISTS idx_records_platform_name ON records(platform,name_lower);
+            CREATE INDEX IF NOT EXISTS idx_records_platform_category ON records(platform,category);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
                 name, data, content='records', content_rowid='id'
             );
-
             CREATE TRIGGER IF NOT EXISTS records_ai AFTER INSERT ON records BEGIN
-                INSERT INTO records_fts(rowid, name, data) VALUES(new.id, new.name, new.data);
+                INSERT INTO records_fts(rowid,name,data) VALUES(new.id,new.name,new.data);
             END;
             CREATE TRIGGER IF NOT EXISTS records_ad AFTER DELETE ON records BEGIN
-                INSERT INTO records_fts(records_fts, rowid, name, data)
-                VALUES('delete', old.id, old.name, old.data);
+                INSERT INTO records_fts(records_fts,rowid,name,data) VALUES('delete',old.id,old.name,old.data);
             END;
             CREATE TRIGGER IF NOT EXISTS records_au AFTER UPDATE ON records BEGIN
-                INSERT INTO records_fts(records_fts, rowid, name, data)
-                VALUES('delete', old.id, old.name, old.data);
-                INSERT INTO records_fts(rowid, name, data) VALUES(new.id, new.name, new.data);
+                INSERT INTO records_fts(records_fts,rowid,name,data) VALUES('delete',old.id,old.name,old.data);
+                INSERT INTO records_fts(rowid,name,data) VALUES(new.id,new.name,new.data);
             END;
 
             CREATE TABLE IF NOT EXISTS record_terms (
@@ -228,9 +206,8 @@ def init_db(db_file: Path | str | None = None, reset: bool = False) -> None:
                 json_path TEXT,
                 FOREIGN KEY(record_id) REFERENCES records(id)
             );
-            CREATE INDEX IF NOT EXISTS idx_terms_lower ON record_terms(term_lower);
-            CREATE INDEX IF NOT EXISTS idx_terms_type_value ON record_terms(term_type, term_lower);
-            CREATE INDEX IF NOT EXISTS idx_terms_record ON record_terms(record_id);
+            CREATE INDEX IF NOT EXISTS idx_terms_lower_record ON record_terms(term_lower,record_id);
+            CREATE INDEX IF NOT EXISTS idx_terms_type_lower_record ON record_terms(term_type,term_lower,record_id);
 
             CREATE TABLE IF NOT EXISTS record_networks (
                 record_id INTEGER NOT NULL,
@@ -242,8 +219,7 @@ def init_db(db_file: Path | str | None = None, reset: bool = False) -> None:
                 json_path TEXT,
                 FOREIGN KEY(record_id) REFERENCES records(id)
             );
-            CREATE INDEX IF NOT EXISTS idx_network_version_bounds
-                ON record_networks(version, start_hex, end_hex);
+            CREATE INDEX IF NOT EXISTS idx_network_lookup ON record_networks(version,start_hex,end_hex,record_id);
             CREATE INDEX IF NOT EXISTS idx_network_record ON record_networks(record_id);
 
             CREATE TABLE IF NOT EXISTS record_refs (
@@ -254,23 +230,56 @@ def init_db(db_file: Path | str | None = None, reset: bool = False) -> None:
                 json_path TEXT,
                 FOREIGN KEY(record_id) REFERENCES records(id)
             );
-            CREATE INDEX IF NOT EXISTS idx_refs_type_value ON record_refs(ref_type, ref_value_lower);
-            CREATE INDEX IF NOT EXISTS idx_refs_value ON record_refs(ref_value_lower);
-            CREATE INDEX IF NOT EXISTS idx_refs_record ON record_refs(record_id);
+            CREATE INDEX IF NOT EXISTS idx_refs_type_value_record ON record_refs(ref_type,ref_value_lower,record_id);
+            CREATE INDEX IF NOT EXISTS idx_refs_value_record ON record_refs(ref_value_lower,record_id);
+
+            -- Denormalized Palo relationship indexes. These eliminate the old
+            -- "load every Palo JSON record and walk it in Python" bottleneck.
+            CREATE TABLE IF NOT EXISTS pan_group_members (
+                group_record_id INTEGER NOT NULL,
+                member_name TEXT NOT NULL,
+                member_name_lower TEXT NOT NULL,
+                FOREIGN KEY(group_record_id) REFERENCES records(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pan_group_member ON pan_group_members(member_name_lower,group_record_id);
+            CREATE INDEX IF NOT EXISTS idx_pan_group_id ON pan_group_members(group_record_id);
+
+            CREATE TABLE IF NOT EXISTS pan_rule_refs (
+                rule_record_id INTEGER NOT NULL,
+                field TEXT NOT NULL,
+                ref_name TEXT NOT NULL,
+                ref_name_lower TEXT NOT NULL,
+                FOREIGN KEY(rule_record_id) REFERENCES records(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pan_rule_ref ON pan_rule_refs(field,ref_name_lower,rule_record_id);
+            CREATE INDEX IF NOT EXISTS idx_pan_rule_id ON pan_rule_refs(rule_record_id);
+
+            CREATE TABLE IF NOT EXISTS pan_rule_networks (
+                rule_record_id INTEGER NOT NULL,
+                field TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                start_hex TEXT NOT NULL,
+                end_hex TEXT NOT NULL,
+                value TEXT NOT NULL,
+                FOREIGN KEY(rule_record_id) REFERENCES records(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pan_rule_net_lookup ON pan_rule_networks(field,version,start_hex,end_hex,rule_record_id);
+            CREATE INDEX IF NOT EXISTS idx_pan_rule_net_id ON pan_rule_networks(rule_record_id);
             """
         )
+        # Lightweight migration for databases created by the previous version.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(records)").fetchall()}
+        if "name_lower" not in cols:
+            conn.execute("ALTER TABLE records ADD COLUMN name_lower TEXT")
+            conn.execute("UPDATE records SET name_lower=lower(COALESCE(name,''))")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_records_name_lower ON records(name_lower)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_records_platform_name ON records(platform,name_lower)")
         conn.commit()
     finally:
         conn.close()
 
 
-def find_network_record_ids(
-    conn: sqlite3.Connection,
-    value: str,
-    *,
-    platform: str | None = None,
-    limit: int = 2000,
-) -> list[int]:
+def find_network_record_ids(conn: sqlite3.Connection, value: str, *, platform: str | None = None, limit: int = 2000) -> list[int]:
     bounds = network_bounds(value)
     if not bounds:
         return []
@@ -278,30 +287,30 @@ def find_network_record_ids(
     sql = """
         SELECT DISTINCT rn.record_id
         FROM record_networks rn
-        JOIN records r ON r.id = rn.record_id
-        WHERE rn.version = ?
-          AND rn.start_hex <= ?
-          AND rn.end_hex >= ?
+        JOIN records r ON r.id=rn.record_id
+        WHERE rn.version=? AND rn.start_hex<=? AND rn.end_hex>=?
     """
     params: list[Any] = [version, ip_hex(end), ip_hex(start)]
     if platform:
-        sql += " AND r.platform = ?"
+        sql += " AND r.platform=?"
         params.append(platform)
     sql += " LIMIT ?"
     params.append(limit)
-    return [int(row[0]) for row in conn.execute(sql, params).fetchall()]
+    return [int(r[0]) for r in conn.execute(sql, params).fetchall()]
+
 
 def fetch_records_by_ids(conn: sqlite3.Connection, record_ids: Iterable[int]) -> list[sqlite3.Row]:
     ids = list(dict.fromkeys(int(x) for x in record_ids))
     if not ids:
         return []
-    placeholders = ",".join("?" for _ in ids)
-    return conn.execute(
-        f"""
-        SELECT r.id, d.name AS device, r.platform, r.category, r.filename, r.name, r.data
-        FROM records r
-        JOIN devices d ON d.id = r.device_id
-        WHERE r.id IN ({placeholders})
-        """,
-        ids,
-    ).fetchall()
+    out: list[sqlite3.Row] = []
+    # Keep parameter lists comfortably below SQLite's variable limits.
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        out.extend(conn.execute(
+            f"""SELECT r.id,d.name AS device,r.platform,r.category,r.filename,r.name,r.data
+                FROM records r JOIN devices d ON d.id=r.device_id
+                WHERE r.id IN ({placeholders})""", chunk
+        ).fetchall())
+    return out
