@@ -1,67 +1,69 @@
-#!/usr/bin/env python3
-from pathlib import Path
-import json
-import os
-from flask import Flask, jsonify, render_template, request
-from database import PANOS, DB_PATH, get_db
+from flask import Flask, jsonify, request, render_template
+from database import init_db, get_db, investigate
 
 app = Flask(__name__)
+init_db()
 
-ORG_FILE_PATH = Path("org_topology.json").resolve()
-PAN_TOPOLOGY_PATH = Path("panorama_topology.json").resolve()
-AWS_DATA_ROOT = Path("aws_parsed").resolve()
-FW_DATA_ROOT = Path("parsed").resolve()
-
-@app.route("/")
-def index():
+@app.route("/", methods=["GET"])
+def dashboard():
+    # Renders index.html directly from the templates/ directory
     return render_template("index.html")
 
-@app.route("/api/info")
-def api_info():
-    return jsonify({
-        "files": PANOS.files_count(), 
-        "devices": PANOS.devices_count()
-    })
+@app.route("/api/policy-lookup", methods=["GET"])
+def policy_lookup():
+    src = request.args.get("src")
+    dst = request.args.get("dst")
+    port = request.args.get("port", type=int)
+    device_id = request.args.get("device_id")
+    platform = request.args.get("platform")
+    category = request.args.get("category")
 
-@app.route("/api/stats")
-def api_stats():
-    return jsonify(PANOS.get_stats())
+    result = investigate(
+        device_id=device_id,
+        platform=platform,
+        category=category,
+        src=src,
+        dst=dst,
+        port=port
+    )
+    return jsonify(result)
 
-@app.route("/api/metadata")
-def api_metadata():
-    """Provides last run timestamps and file metadata for the frontend."""
-    db_mtime = "N/A"
-    if DB_PATH.exists():
-        mtime_epoch = DB_PATH.stat().st_mtime
-        db_mtime = os.path.fromtimestamp(mtime_epoch).strftime("%Y-%m-%d %H:%M:%S") if hasattr(os, 'path') else str(mtime_epoch)
-        
-    return jsonify({
-        "last_run": db_mtime,
-        "database_size_kb": round(DB_PATH.stat().st_size / 1024, 2) if DB_PATH.exists() else 0,
-        "panos_source_exists": FW_DATA_ROOT.exists(),
-        "aws_source_exists": AWS_DATA_ROOT.exists()
-    })
+@app.route("/api/search", methods=["GET"])
+def search_records():
+    query_term = request.args.get("q", "")
+    conn = get_db()
+    cursor = conn.cursor()
 
-@app.route("/api/investigate")
-def api_investigate():
-    query = request.args.get("q", "").strip()
-    if not query:
-        return jsonify({"error": "A search query is required."}), 400
-    return jsonify(PANOS.investigate(query))
+    cursor.execute("""
+        SELECT * FROM records 
+        WHERE device_id LIKE ? OR platform LIKE ? OR category LIKE ? OR raw_data LIKE ?
+    """, (f"%{query_term}%", f"%{query_term}%", f"%{query_term}%", f"%{query_term}%"))
 
-@app.route("/api/topology/aws")
-def api_topology_aws():
-    if ORG_FILE_PATH.exists():
-        with ORG_FILE_PATH.open("r", encoding="utf-8") as f:
-            return jsonify(json.load(f))
-    return jsonify({"error": "File not found."}), 404
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({"query": query_term, "results": rows, "count": len(rows)})
 
-@app.route("/api/topology/pan")
-def api_topology_pan():
-    if PAN_TOPOLOGY_PATH.exists():
-        with PAN_TOPOLOGY_PATH.open("r", encoding="utf-8") as f:
-            return jsonify(json.load(f))
-    return jsonify({"error": "File not found."}), 404
+@app.route("/api/topology", methods=["GET"])
+def get_topology():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM topology")
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({"topology_nodes": rows})
+
+@app.route("/api/automation", methods=["GET"])
+def get_automation_results():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM automation_results ORDER BY timestamp DESC")
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({"automation_results": rows})
+
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    return jsonify({"status": "healthy", "service": "PerDef Security Orchestrator API"})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
