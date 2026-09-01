@@ -92,11 +92,9 @@ def _find_key_recursively(obj: Any, keys: list[str]) -> Any:
 
 
 def _clean_fts_query(query: str) -> str:
-    # Allow broader terms or tokenize correctly for FTS5 matching
     tokens = re.findall(r"[a-zA-Z0-9_\-\.]+", query)
     if not tokens:
         return ""
-    # Use NEAR or simple prefix matching safely without forcing strict phrase wrapping unless quoted
     return " ".join(f"{t}*" for t in tokens)
 
 def _classify_panos_record(row: Any, item_payload: Any, output: dict[str, Any]) -> None:
@@ -284,7 +282,7 @@ class InfrastructureDataSource:
                 cursor.execute(
                     """
                     SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE r.category LIKE '%subnet%' AND d.name = ?
+                    WHERE REPLACE(r.category, '-', '_') LIKE '%subnet%' AND d.name = ?
                     """,
                     (dev_name,),
                 )
@@ -302,7 +300,7 @@ class InfrastructureDataSource:
                 cursor.execute(
                     """
                     SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE r.category LIKE '%vpc%' AND d.name = ?
+                    WHERE REPLACE(r.category, '-', '_') LIKE '%vpc%' AND d.name = ?
                     """,
                     (dev_name,),
                 )
@@ -326,7 +324,7 @@ class InfrastructureDataSource:
                     cursor.execute(
                         """
                         SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                        WHERE r.category LIKE '%subnet%'
+                        WHERE REPLACE(r.category, '-', '_') LIKE '%subnet%'
                           AND (r.name = ? OR json_extract(r.data, '$.SubnetId') = ?)
                           AND d.name = ?
                         """,
@@ -344,7 +342,7 @@ class InfrastructureDataSource:
                     cursor.execute(
                         """
                         SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                        WHERE r.category LIKE '%vpc%'
+                        WHERE REPLACE(r.category, '-', '_') LIKE '%vpc%'
                           AND (r.name = ? OR json_extract(r.data, '$.VpcId') = ?)
                           AND d.name = ?
                         """,
@@ -372,9 +370,9 @@ class InfrastructureDataSource:
                 SELECT r.id, r.name, r.category, r.data, d.name AS device_name
                 FROM records r JOIN devices d ON r.device_id = d.id
                 WHERE r.platform = 'panos'
-                  AND (r.category LIKE '%object%'
-                    OR r.category LIKE '%address%'
-                    OR r.category LIKE '%group%')
+                  AND (REPLACE(r.category, '-', '_') LIKE '%object%'
+                    OR REPLACE(r.category, '-', '_') LIKE '%address%'
+                    OR REPLACE(r.category, '-', '_') LIKE '%group%')
                 """
             )
             for row in cursor.fetchall():
@@ -411,9 +409,9 @@ class InfrastructureDataSource:
                     """
                     SELECT r.id, d.name AS device, r.category, r.filename, r.name, r.data
                     FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE r.platform = 'aws' AND (r.category = 'security_groups'
-                        OR r.category = 'security_group'
-                        OR r.category LIKE '%security-group%')
+                    WHERE r.platform = 'aws' AND (REPLACE(r.category, '-', '_') = 'security_groups'
+                        OR REPLACE(r.category, '-', '_') = 'security_group'
+                        OR REPLACE(r.category, '-', '_') LIKE '%security_group%')
                       AND (r.name = ? OR json_extract(r.data, '$.GroupId') = ?)
                       AND d.name = ?
                     """,
@@ -578,7 +576,6 @@ class InfrastructureDataSource:
             conn.close()
                 
     def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> dict[str, Any]:
-        """Directly query and match source/destination IPs, objects, and parent groups from the DB."""
         source = source.strip()
         destination = destination.strip()
         port = port.strip()
@@ -620,7 +617,7 @@ class InfrastructureDataSource:
             name = row["name"] or eval_item.get("@name") or eval_item.get("name") or ""
             all_records.append({
                 "name": str(name),
-                "category": str(row["category"]).lower(),
+                "category": str(row["category"]).replace("-", "_").lower(),
                 "device": row["device_name"],
                 "data": eval_item,
                 "raw": row["data"].lower()
@@ -633,19 +630,16 @@ class InfrastructureDataSource:
             t_l = text.lower()
             if q_l in t_l:
                 return True
-            # Simple IP / CIDR inclusion fallback
             if q_l.split('/')[0] in t_l:
                 return True
             return False
     
-        # 1. Find direct matching objects and groups
         matched_obj_names = set()
         for rec in all_records:
             cat = rec["category"]
             if "security_rules" in cat or "nat_rules" in cat:
                 continue
     
-            # Check if query matches object name or its raw values
             is_match = False
             if source and match_query(rec["name"], source):
                 is_match = True
@@ -666,11 +660,9 @@ class InfrastructureDataSource:
                     if not any(o["name"] == rec["name"] for o in output["matched_objects"]):
                         output["matched_objects"].append({"name": rec["name"], "category": rec["category"], "device": rec["device"], "data": rec["data"]})
     
-        # If source/destination strings themselves weren't explicit object names, add them to tracking
         if source: matched_obj_names.add(source)
         if destination: matched_obj_names.add(destination)
     
-        # 2. Recursively find all parent groups containing these objects/IPs
         group_map = {}
         for rec in all_records:
             if "address_groups" in rec["category"]:
@@ -683,7 +675,6 @@ class InfrastructureDataSource:
                         if m:
                             group_map.setdefault(str(m), set()).add(rec["name"])
     
-        # Expand upwards to find parent groups
         expanded_entities = set(matched_obj_names)
         stack = list(matched_obj_names)
         visited = set()
@@ -696,13 +687,11 @@ class InfrastructureDataSource:
             for p in parents:
                 expanded_entities.add(p)
                 stack.append(p)
-                # Fetch parent record details to append to output
                 for rec in all_records:
                     if rec["name"] == p and "group" in rec["category"]:
                         if not any(g["name"] == p for g in output["matched_groups"]):
                             output["matched_groups"].append({"name": p, "category": rec["category"], "device": rec["device"], "data": rec["data"]})
     
-        # 3. Match rules containing any of the expanded objects/groups or matching strings
         for rec in all_records:
             if "security_rules" in rec["category"] or "nat_rules" in rec["category"]:
                 r_data = rec["data"]
@@ -815,12 +804,12 @@ def api_search_rules():
     source = request.args.get("source", "").strip()
     destination = request.args.get("destination", "").strip()
     port = request.args.get("port", "").strip()
-    results = investigator.search_rules(source=source, destination=destination, port=port)
+    results = DATA.policy_lookup(source=source, destination=destination, port=port)
     return jsonify(results)
 
 @app.route("/api/debug-records")
 def api_debug_records():
-    conn = get_db(investigator.db_file if hasattr(investigator, 'db_file') else DATA.db_file)
+    conn = get_db(DATA.db_file)
     cursor = conn.cursor()
     cursor.execute("SELECT DISTINCT platform, category FROM records")
     categories = cursor.fetchall()
