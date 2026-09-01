@@ -88,56 +88,73 @@ async function executePolicyLookup() {
         const res = await fetch("/api/policy-lookup?" + params.toString());
         const data = await res.json();
 
-        // Automatically find the first array inside the returned JSON object
-        let rules = [];
-        if (Array.isArray(data)) {
-            rules = data;
-        } else if (data && typeof data === 'object') {
-            const possibleKey = Object.keys(data).find(k => Array.isArray(data[k]));
-            if (possibleKey) {
-                rules = data[possibleKey];
-            }
-        }
+        let html = `<div class="section"><div class="section-title"><h2>Policy Lookup Results</h2><span class="count">Query: ${esc(data.query || 'N/A')}</span></div>`;
+        html += `<div style="padding: 16px;">`;
 
-        if (rules.length > 0) {
-            let html = `<div class="section"><div class="section-title"><h2>Matching Rules & Intersections</h2><span class="count">${rules.length} Rules Found</span></div>`;
+        // Helper to render sections like matched_rules, matched_objects, matched_groups, rules
+        function renderSectionGroup(title, items) {
+            if (!items || !Array.isArray(items) || items.length === 0) return '';
             
-            html += `<div style="padding: 16px;">`;
-            rules.forEach((rule, idx) => {
-                const ruleName = rule.name || rule.rule_name || `Rule #${idx + 1}`;
-                const action = rule.action || 'allow';
-                const actionColor = action.toLowerCase() === 'deny' || action.toLowerCase() === 'drop' ? '#f87171' : '#34d399';
+            let secHtml = `<h3 style="font-size: 14px; color: var(--gold); margin: 16px 0 8px 0; border-bottom: 1px solid #333; padding-bottom: 4px;">${esc(title)} (${items.length})</h3>`;
+            
+            items.forEach((item, idx) => {
+                // Support objects where data might be nested or direct
+                const itemData = item.data || item.entry || item;
+                const itemName = item.name || itemData.name || itemData['@name'] || `Item #${idx + 1}`;
+                const action = itemData.action || item.action || 'info';
+                const actionColor = ['deny', 'drop', 'block'].includes(String(action).toLowerCase()) ? '#f87171' : '#34d399';
                 
-                html += `
-                    <div style="background: #1e1f24; border: 1px solid #333; border-radius: 6px; padding: 14px; margin-bottom: 12px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #2f3036; padding-bottom: 8px;">
-                            <b style="font-size: 15px; color: #fff;">${esc(ruleName)}</b>
-                            <span style="font-size: 11px; background: ${actionColor}22; color: ${actionColor}; border: 1px solid ${actionColor}55; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">${esc(action)}</span>
+                secHtml += `
+                    <div style="background: #1e1f24; border: 1px solid #333; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; border-bottom: 1px solid #2f3036; padding-bottom: 6px;">
+                            <b style="font-size: 14px; color: #fff;">${esc(itemName)}</b>
+                            <span style="font-size: 10px; background: ${actionColor}22; color: ${actionColor}; border: 1px solid ${actionColor}55; padding: 2px 6px; border-radius: 4px; text-transform: uppercase;">${esc(action)}</span>
                         </div>
-                        <div style="font-size: 13px; color: #cbd5e1; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px;">
-                            <div><b>Source:</b> ${esc(formatField(rule.source || rule.src))}</div>
-                            <div><b>Destination:</b> ${esc(formatField(rule.destination || rule.dst))}</div>
-                            <div><b>Service:</b> ${esc(formatField(rule.service || rule.port))}</div>
+                        <div style="font-size: 12.5px; color: #cbd5e1; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px;">
+                            <div><b>Source:</b> ${esc(formatField(itemData.source || itemData.src || itemData.from))}</div>
+                            <div><b>Destination:</b> ${esc(formatField(itemData.destination || itemData.dst || itemData.to))}</div>
+                            <div><b>Service:</b> ${esc(formatField(itemData.service || itemData.port || itemData.services))}</div>
                         </div>
                     </div>
                 `;
             });
-            html += `</div></div>`;
-            
-            document.getElementById("policyLookupOutput").innerHTML = html;
-        } else {
-            // Fallback that displays keys so we can see what the backend actually named it if no array is found
-            document.getElementById("policyLookupOutput").innerHTML = `
-                <div class="empty">
-                    <p>Response received, but no rule array found.</p>
-                    <p style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Keys found in JSON: ${Object.keys(data).join(', ')}</p>
-                    <details style="margin-top: 10px; text-align: left;">
-                        <summary>View Raw JSON Payload</summary>
-                        <pre>${jsonStr(data)}</pre>
-                    </details>
-                </div>
-            `;
+            return secHtml;
         }
+
+        let totalMatchedCount = 0;
+        const sectionsToProcess = [
+            { key: 'rules', label: 'Matching Rules' },
+            { key: 'matched_rules', label: 'Matched Security & NAT Rules' },
+            { key: 'matched_objects', label: 'Matched Objects' },
+            { key: 'matched_groups', label: 'Matched Groups' }
+        ];
+
+        sectionsToProcess.forEach(sec => {
+            if (data[sec.key] && Array.isArray(data[sec.key])) {
+                totalMatchedCount += data[sec.key].length;
+                html += renderSectionGroup(sec.label, data[sec.key]);
+            }
+        });
+
+        if (totalMatchedCount === 0) {
+            html += `<div class="empty">No matching records found across rules, groups, or objects.</div>`;
+        }
+
+        html += `</div>`;
+
+        // Always show full raw JSON payload at the bottom
+        html += `
+            <div style="padding: 16px; border-top: 1px solid #2f3036; background: #18191d;">
+                <details>
+                    <summary style="cursor: pointer; color: #94a3b8; font-size: 13px; font-weight: bold;">🔍 View Full Raw JSON Payload</summary>
+                    <pre style="margin-top: 10px; padding: 12px; background: #111; color: #34d399; border-radius: 4px; overflow-x: auto; font-size: 12px;">${jsonStr(data)}</pre>
+                </details>
+            </div>
+        `;
+
+        html += `</div>`;
+        document.getElementById("policyLookupOutput").innerHTML = html;
+
     } catch (err) {
         document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Error: ${esc(err.message)}</div>`;
     }
@@ -146,5 +163,6 @@ async function executePolicyLookup() {
 function formatField(val) {
     if (!val) return 'Any';
     if (Array.isArray(val)) return val.join(', ');
+    if (typeof val === 'object') return JSON.stringify(val);
     return val;
 }
