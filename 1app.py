@@ -23,6 +23,8 @@ from database import (
     get_file_modified_time,
     get_latest_dir_mtime,
     sqlite_ip_contains,
+    classify_ip_search,
+    value_matches_network_or_range,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -190,10 +192,12 @@ class InfrastructureDataSource:
     def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         query = query.strip()
         query_network = extract_ip_or_cidr(query)
+        search_info = classify_ip_search(query)
 
         output: dict[str, Any] = {
             "query": query,
-            "query_type": "ip_or_cidr" if query_network else "text",
+            "query_type": search_info["type"],
+            "query_family": search_info["family"],
             "matched_objects": [],
             "matched_rules": [],
             "all_entries_matches": [],
@@ -354,7 +358,10 @@ class InfrastructureDataSource:
                             if isinstance(block, dict) and block.get("CidrBlock"):
                                 related_cidrs_to_match.add(str(block["CidrBlock"]))
 
-            # Palo Alto object/address/group lookup using discovered AWS IP/VPC/subnet ranges.
+            # Palo Alto object/address/group lookup using the search itself plus
+            # AWS subnet/VPC CIDRs discovered from matching EC2/RDS/ENI resources.
+            # For an IP such as 10.20.30.15 this intentionally searches:
+            #   10.20.30.15/32 -> subnet CIDR -> VPC CIDR
             all_target_nets = [query_network] if query_network else []
             for cidr in related_cidrs_to_match:
                 net_obj = extract_ip_or_cidr(cidr)
@@ -390,6 +397,8 @@ class InfrastructureDataSource:
                             "file": "",
                             "name": row["name"],
                             "data": p_data,
+                            "match_context": "aws_network_context" if cidr != query else "query",
+                            "matched_cidr": cidr,
                         })
                         break
 
@@ -450,11 +459,7 @@ class InfrastructureDataSource:
                             continue
                         for target in targets:
                             target_net = extract_ip_or_cidr(target)
-                            if target_net and target_net.version == cidr_net.version:
-                                if cidr_net.overlaps(target_net):
-                                    is_match = True
-                                    break
-                            elif target and sqlite_ip_contains(cidr, target):
+                            if target and value_matches_network_or_range(cidr, target):
                                 is_match = True
                                 break
                         if is_match:
