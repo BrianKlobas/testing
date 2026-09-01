@@ -854,6 +854,21 @@ def api_search_rules():
     results = investigator.search_rules(source=source, destination=destination, port=port)
     return jsonify(results)
 
+@app.route("/api/debug-records")
+def api_debug_records():
+    conn = get_db(investigator.db_file if hasattr(investigator, 'db_file') else DATA.db_file)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT platform, category FROM records")
+    categories = cursor.fetchall()
+    
+    cursor.execute("SELECT device_id, platform, category, name, SUBSTR(data, 1, 150) FROM records WHERE platform='panos' LIMIT 5")
+    sample_panos = cursor.fetchall()
+    conn.close()
+    
+    return jsonify({
+        "available_categories": [dict(row) for row in categories],
+        "sample_panos_records": [dict(row) for row in sample_panos]
+    })
 
 def main() -> None:
     global DB_PATH, FW_DATA_ROOT, AWS_DATA_ROOT, ORG_FILE_PATH, PAN_TOPOLOGY_PATH, DATA
