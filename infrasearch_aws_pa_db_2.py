@@ -550,26 +550,27 @@ class InfrastructureDataSource:
                 output["matched_objects"].append(rec)
 
         if related_cidrs_to_match:
+            def extract_all_json_ips(obj: Any) -> list[str]:
+                results = []
+                if isinstance(obj, str):
+                    val = obj.strip()
+                    if "/" in val or "-" in val or re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', val):
+                        results.append(val)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        results.extend(extract_all_json_ips(item))
+                elif isinstance(obj, dict):
+                    for k, v in obj.items():
+                        results.extend(extract_all_json_ips(v))
+                return results
+
             for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
-                eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+                
+                # Recursively extract all potential IP/CIDR/range strings from anywhere in the record
+                targets = extract_all_json_ips(item_data)
 
-                targets = []
-                if isinstance(eval_obj, dict):
-                    for k in ("ip-netmask", "ip_netmask", "ip-range", "ip_range", "fqdn", "value"):
-                        v = eval_obj.get(k)
-                        if isinstance(v, str):
-                            targets.append(v)
-                        elif isinstance(v, list):
-                            targets.extend([str(x) for x in v if isinstance(x, str)])
-                        elif isinstance(v, dict):
-                            mem = v.get("member")
-                            if isinstance(mem, str):
-                                targets.append(mem)
-                            elif isinstance(mem, list):
-                                targets.extend([str(x) for x in mem if isinstance(x, str)])
-                              
                 for cidr in related_cidrs_to_match:
                     cidr_net = extract_ip_or_cidr(cidr)
                     for target in targets:
@@ -586,6 +587,7 @@ class InfrastructureDataSource:
 
                 if is_match:
                     matched_panos_ids.add(row["id"])
+                    eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
                     obj_name = row["name"] or item_data.get("name") or (eval_obj.get("@name") if isinstance(eval_obj, dict) else "")
                     if obj_name:
                         matched_object_names.add(str(obj_name))
