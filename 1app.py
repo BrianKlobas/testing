@@ -578,7 +578,7 @@ class InfrastructureDataSource:
             conn.close()
             
     def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> list[dict[str, Any]]:
-        """Lookup Palo Alto security rules and resolve object groups for source, destination, and port."""
+        """Lookup Palo Alto rules by resolving addresses, address_groups, and security_rules categories."""
         source = source.strip()
         destination = destination.strip()
         port = port.strip()
@@ -598,6 +598,7 @@ class InfrastructureDataSource:
             all_records = cursor.fetchall()
             
             object_map = {}
+            group_map = {}
             rule_records = []
 
             for row in all_records:
@@ -607,75 +608,84 @@ class InfrastructureDataSource:
                     continue
                 
                 cat = str(row["category"]).lower()
-                name = row["name"] or item_data.get("name") or ""
-                if name:
-                    object_map[name] = item_data
-                
                 eval_item = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
-                if isinstance(eval_item, dict):
-                    entry_name = eval_item.get("@name") or eval_item.get("name")
-                    if entry_name:
-                        object_map[entry_name] = item_data
+                if not isinstance(eval_item, dict):
+                    eval_item = item_data
 
-                # Target the exact panos security_rules category
-                if cat == "security_rules" or "rule" in cat or "security" in cat:
-                    rule_records.append((row, item_data))
+                name = row["name"] or eval_item.get("@name") or eval_item.get("name") or ""
+                
+                if cat == "addresses" or "address" in cat and "group" not in cat:
+                    if name:
+                        object_map[name] = eval_item
+                        object_map[name.lower()] = eval_item
+                elif cat == "address_groups" or ("address" in cat and "group" in cat):
+                    if name:
+                        group_map[name] = eval_item
+                        group_map[name.lower()] = eval_item
+                elif cat == "security_rules" or "rule" in cat or "security" in cat:
+                    rule_records.append((row, eval_item))
 
-            def resolve_object_members(obj_name: str) -> set[str]:
-                members = {obj_name}
-                stack = [obj_name]
+            def resolve_group_members(group_name: str) -> set[str]:
+                """Recursively expand address groups and their members."""
+                members = {group_name}
+                stack = [group_name]
                 visited = set()
                 while stack:
                     curr = stack.pop()
                     if curr in visited:
                         continue
                     visited.add(curr)
-                    obj_data = object_map.get(curr)
-                    if not obj_data:
-                        continue
-                    eval_obj = obj_data.get("entry", obj_data) if isinstance(obj_data, dict) else obj_data
-                    if isinstance(eval_obj, dict):
-                        for member_key in ["static", "member"]:
-                            m_list = eval_obj.get(member_key, [])
-                            if isinstance(m_list, str):
-                                m_list = [m_list]
-                            for m in m_list:
-                                if m not in visited:
-                                    members.add(m)
-                                    stack.append(m)
+                    
+                    # Check group definitions
+                    g_data = group_map.get(curr) or group_map.get(curr.lower())
+                    if g_data and isinstance(g_data, dict):
+                        for key in ["static", "member"]:
+                            val = g_data.get(key, [])
+                            if isinstance(val, dict):
+                                val = val.get("member", [])
+                            if isinstance(val, str):
+                                val = [val]
+                            for m in val:
+                                if m and m not in visited:
+                                z_m = str(m)
+                                members.add(z_m)
+                                stack.append(z_m)
                 return members
 
             src_net = extract_ip_or_cidr(source) if source else None
             dst_net = extract_ip_or_cidr(destination) if destination else None
 
-            def matches_criterion(member_item: str, target_str: str, target_net) -> bool:
-                if target_str.lower() in member_item.lower():
+            def member_matches(member_name: str, target_str: str, target_net) -> bool:
+                if not target_str:
                     return True
-                m_net = extract_ip_or_cidr(member_item)
+                if target_str.lower() in member_name.lower():
+                    return True
+                
+                # Check raw IP/CIDR match
+                m_net = extract_ip_or_cidr(member_name)
                 if target_net and m_net and target_net.overlaps(m_net):
                     return True
-                obj_data = object_map.get(member_item)
-                if obj_data:
-                    o_eval = obj_data.get("entry", obj_data) if isinstance(obj_data, dict) else obj_data
-                    if isinstance(o_eval, dict):
-                        for val_key in ["ip-netmask", "address", "ip_net", "value"]:
-                            val = o_eval.get(val_key)
-                            if val:
-                                if target_str.lower() in str(val).lower():
-                                    return True
-                                val_net = extract_ip_or_cidr(str(val))
-                                if target_net and val_net and target_net.overlaps(val_net):
-                                    return True
+
+                # Check mapped address object IP / netmask / range values
+                obj_data = object_map.get(member_name) or object_map.get(member_name.lower())
+                if obj_data and isinstance(obj_data, dict):
+                    for ip_key in ["ip-netmask", "ip_netmask", "address", "ip_net", "value", "ip-range"]:
+                        ip_val = obj_data.get(ip_key)
+                        if ip_val:
+                            if target_str.lower() in str(ip_val).lower():
+                                return True
+                            ip_net = extract_ip_or_cidr(str(ip_val))
+                            if target_net and ip_net and target_net.overlaps(ip_net):
+                                return True
                 return False
 
-            for row, item_data in rule_records:
-                eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+            for row, eval_obj in rule_records:
                 if not isinstance(eval_obj, dict):
                     continue
 
                 rule_name = row["name"] or eval_obj.get("@name") or eval_obj.get("name", "Unknown")
                 
-                def extract_members(field_key):
+                def extract_field_members(field_key):
                     field = eval_obj.get(field_key, {})
                     if isinstance(field, dict):
                         m = field.get("member", [])
@@ -685,40 +695,36 @@ class InfrastructureDataSource:
                         m = [field] if field else []
                     if isinstance(m, str):
                         m = [m]
-                    return m
+                    return [str(x) for x in m if x]
 
-                src_field = extract_members("source")
-                dst_field = extract_members("destination")
-                srv_field = extract_members("service")
+                src_field = extract_field_members("source")
+                dst_field = extract_field_members("destination")
+                srv_field = extract_field_members("service")
 
+                # Fully expand group references down to base objects/IPs
                 expanded_sources = set()
                 for s in src_field:
-                    expanded_sources.update(resolve_object_members(s))
+                    expanded_sources.update(resolve_group_members(s))
+                    # Also check if the group itself matches directly
+                    expanded_sources.add(s)
 
                 expanded_dests = set()
                 for d in dst_field:
-                    expanded_dests.update(resolve_object_members(d))
+                    expanded_dests.update(resolve_group_members(d))
+                    expanded_dests.add(d)
 
                 match_found = True
                 match_reasons = []
 
                 if source:
-                    src_matched = False
-                    for es in expanded_sources:
-                        if matches_criterion(es, source, src_net):
-                            src_matched = True
-                            break
+                    src_matched = any(member_matches(es, source, src_net) for es in expanded_sources)
                     if not src_matched:
                         match_found = False
                     else:
                         match_reasons.append(f"Source matches '{source}'")
 
                 if destination and match_found:
-                    dst_matched = False
-                    for ed in expanded_dests:
-                        if matches_criterion(ed, destination, dst_net):
-                            dst_matched = True
-                            break
+                    dst_matched = any(member_matches(ed, destination, dst_net) for ed in expanded_dests)
                     if not dst_matched:
                         match_found = False
                     else:
@@ -730,14 +736,6 @@ class InfrastructureDataSource:
                         if port.lower() in srv.lower():
                             port_matched = True
                             break
-                        obj_data = object_map.get(srv)
-                        if obj_data:
-                            o_eval = obj_data.get("entry", obj_data) if isinstance(obj_data, dict) else obj_data
-                            if isinstance(o_eval, dict):
-                                port_val = str(o_eval.get("protocol", "")) + str(o_eval.get("port", ""))
-                                if port.lower() in port_val.lower() or port.lower() in str(o_eval).lower():
-                                    port_matched = True
-                                    break
                     if not port_matched:
                         match_found = False
                     else:
@@ -752,7 +750,7 @@ class InfrastructureDataSource:
                         "destinations": list(expanded_dests),
                         "services": srv_field,
                         "match_reasons": match_reasons,
-                        "data": item_data,
+                        "data": eval_obj,
                     })
 
         finally:
