@@ -577,8 +577,8 @@ class InfrastructureDataSource:
         finally:
             conn.close()
             
-    def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> list[dict[str, Any]]:
-        """Lookup Palo Alto rules and resolve object groups for source, destination, and port."""
+def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> list[dict[str, Any]]:
+        """Lookup Palo Alto rules and resolve object groups with inline db diagnostics."""
         source = source.strip()
         destination = destination.strip()
         port = port.strip()
@@ -588,15 +588,22 @@ class InfrastructureDataSource:
         cursor = conn.cursor()
 
         try:
+            # Diagnostic print to verify database table rows and categories
+            cursor.execute("SELECT DISTINCT platform, category, COUNT(*) FROM records GROUP BY platform, category")
+            print("--- DATABASE RECORDS SUMMARY ---")
+            for row in cursor.fetchall():
+                print(f"Platform: {row[0]}, Category: {row[1]}, Count: {row[2]}")
+            print("--------------------------------")
+
             cursor.execute(
                 """
                 SELECT r.id, r.name, r.category, r.data, d.name AS device_name
                 FROM records r JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos'
                 """
             )
             all_records = cursor.fetchall()
-            
+            print(f"Total records fetched for lookup: {len(all_records)}")
+
             object_map = {}
             rule_records = []
 
@@ -606,20 +613,22 @@ class InfrastructureDataSource:
                 except json.JSONDecodeError:
                     continue
                 
-                cat = row["category"].lower()
+                cat = str(row["category"]).lower()
                 name = row["name"] or item_data.get("name") or ""
                 if name:
                     object_map[name] = item_data
                 
-                # Also index by entry name if present
                 eval_item = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
                 if isinstance(eval_item, dict):
                     entry_name = eval_item.get("@name") or eval_item.get("name")
                     if entry_name:
                         object_map[entry_name] = item_data
 
-                if "rule" in cat or "security" in cat:
+                # Catch any category containing rules, security, policies, or firewall entries
+                if any(k in cat for k in ["rule", "security", "policy", "firewall"]):
                     rule_records.append((row, item_data))
+
+            print(f"Filtered rule records detected: {len(rule_records)}")
 
             def resolve_object_members(obj_name: str) -> set[str]:
                 members = {obj_name}
@@ -649,17 +658,11 @@ class InfrastructureDataSource:
             dst_net = extract_ip_or_cidr(destination) if destination else None
 
             def matches_criterion(member_item: str, target_str: str, target_net) -> bool:
-                # 1. Direct string/substring match
                 if target_str.lower() in member_item.lower():
                     return True
-
-                # 2. Check if member item is a raw IP/CIDR
                 m_net = extract_ip_or_cidr(member_item)
-                if target_net and m_net:
-                    if target_net.overlaps(m_net):
-                        return True
-
-                # 3. Check if member item is an object name in object_map
+                if target_net and m_net and target_net.overlaps(m_net):
+                    return True
                 obj_data = object_map.get(member_item)
                 if obj_data:
                     o_eval = obj_data.get("entry", obj_data) if isinstance(obj_data, dict) else obj_data
@@ -681,7 +684,6 @@ class InfrastructureDataSource:
 
                 rule_name = row["name"] or eval_obj.get("@name") or eval_obj.get("name", "Unknown")
                 
-                # Extract members supporting various PAN-OS JSON structures
                 def extract_members(field_key):
                     field = eval_obj.get(field_key, {})
                     if isinstance(field, dict):
@@ -709,7 +711,6 @@ class InfrastructureDataSource:
                 match_found = True
                 match_reasons = []
 
-                # Check source filter
                 if source:
                     src_matched = False
                     for es in expanded_sources:
@@ -721,7 +722,6 @@ class InfrastructureDataSource:
                     else:
                         match_reasons.append(f"Source matches '{source}'")
 
-                # Check destination filter
                 if destination and match_found:
                     dst_matched = False
                     for ed in expanded_dests:
@@ -733,7 +733,6 @@ class InfrastructureDataSource:
                     else:
                         match_reasons.append(f"Destination matches '{destination}'")
 
-                # Check port filter
                 if port and match_found:
                     port_matched = False
                     for srv in srv_field:
