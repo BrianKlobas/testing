@@ -17,6 +17,11 @@ from database import DEFAULT_DB_PATH, get_db, init_db
 DEFAULT_FW_DATA_ROOT = Path(__file__).resolve().parent / "parsed"
 DEFAULT_AWS_DATA_ROOT = Path(__file__).resolve().parent / "aws_parsed"
 
+# In ingest.py for PAN-OS files:
+file_type = path.stem.replace("-", "_").lower()
+
+# In ingest.py for AWS files:
+service_type = path.stem.replace("-", "_").lower()
 
 def _json_candidates(data: Any) -> list[dict[str, Any]]:
     candidates = data if isinstance(data, list) else [data]
