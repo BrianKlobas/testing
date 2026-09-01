@@ -88,7 +88,16 @@ async function executePolicyLookup() {
         const res = await fetch("/api/policy-lookup?" + params.toString());
         const data = await res.json();
 
-        const rules = data.rules || data.matched_rules || data.results || (Array.isArray(data) ? data : []);
+        // Automatically find the first array inside the returned JSON object
+        let rules = [];
+        if (Array.isArray(data)) {
+            rules = data;
+        } else if (data && typeof data === 'object') {
+            const possibleKey = Object.keys(data).find(k => Array.isArray(data[k]));
+            if (possibleKey) {
+                rules = data[possibleKey];
+            }
+        }
 
         if (rules.length > 0) {
             let html = `<div class="section"><div class="section-title"><h2>Matching Rules & Intersections</h2><span class="count">${rules.length} Rules Found</span></div>`;
@@ -117,7 +126,17 @@ async function executePolicyLookup() {
             
             document.getElementById("policyLookupOutput").innerHTML = html;
         } else {
-            document.getElementById("policyLookupOutput").innerHTML = `<div class="empty">No matching records found.</div>`;
+            // Fallback that displays keys so we can see what the backend actually named it if no array is found
+            document.getElementById("policyLookupOutput").innerHTML = `
+                <div class="empty">
+                    <p>Response received, but no rule array found.</p>
+                    <p style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Keys found in JSON: ${Object.keys(data).join(', ')}</p>
+                    <details style="margin-top: 10px; text-align: left;">
+                        <summary>View Raw JSON Payload</summary>
+                        <pre>${jsonStr(data)}</pre>
+                    </details>
+                </div>
+            `;
         }
     } catch (err) {
         document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Error: ${esc(err.message)}</div>`;
