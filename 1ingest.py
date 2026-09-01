@@ -84,85 +84,92 @@ def ingest_data(
         device_cache[device_name] = int(row["id"])
         return device_cache[device_name]
 
-    if fw_root.exists():
-        for path in sorted(fw_root.rglob("*.json")):
-            if not path.is_file():
-                continue
+    cursor.execute("BEGIN TRANSACTION;")
+    try:
+        if fw_root.exists():
+            for path in sorted(fw_root.rglob("*.json")):
+                if not path.is_file():
+                    continue
 
-            rel = path.relative_to(fw_root)
-            device = rel.parts[0] if len(rel.parts) > 1 else "(root)"
-            file_type = path.stem
+                rel = path.relative_to(fw_root)
+                device = rel.parts[0] if len(rel.parts) > 1 else "(root)"
+                file_type = path.stem
 
-            try:
-                with path.open("r", encoding="utf-8") as handle:
-                    data = json.load(handle)
-            except (OSError, json.JSONDecodeError):
-                continue
+                try:
+                    with path.open("r", encoding="utf-8") as handle:
+                        data = json.load(handle)
+                except (OSError, json.JSONDecodeError):
+                    continue
 
-            candidates = _json_candidates(data)
-            dev_id = get_device_id(device)
-            counts["panos_files"] += 1
+                candidates = _json_candidates(data)
+                dev_id = get_device_id(device)
+                counts["panos_files"] += 1
 
-            for item in candidates:
-                cursor.execute(
-                    """
-                    INSERT INTO records
-                        (device_id, platform, category, filename, name, data)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        dev_id,
-                        "panos",
-                        file_type,
-                        path.name,
-                        _panos_record_name(item),
-                        json.dumps(item),
-                    ),
-                )
-                counts["panos_records"] += 1
+                for item in candidates:
+                    cursor.execute(
+                        """
+                        INSERT INTO records
+                            (device_id, platform, category, filename, name, data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            dev_id,
+                            "panos",
+                            file_type,
+                            path.name,
+                            _panos_record_name(item),
+                            json.dumps(item),
+                        ),
+                    )
+                    counts["panos_records"] += 1
 
-    if aws_root.exists():
-        for path in sorted(aws_root.rglob("*.json")):
-            if not path.is_file():
-                continue
+        if aws_root.exists():
+            for path in sorted(aws_root.rglob("*.json")):
+                if not path.is_file():
+                    continue
 
-            rel = path.relative_to(aws_root)
-            if len(rel.parts) < 3:
-                continue
+                rel = path.relative_to(aws_root)
+                if len(rel.parts) < 3:
+                    continue
 
-            account_name = rel.parts[0]
-            service_type = path.stem
+                account_name = rel.parts[0]
+                service_type = path.stem
 
-            try:
-                with path.open("r", encoding="utf-8") as handle:
-                    data = json.load(handle)
-            except (OSError, json.JSONDecodeError):
-                continue
+                try:
+                    with path.open("r", encoding="utf-8") as handle:
+                        data = json.load(handle)
+                except (OSError, json.JSONDecodeError):
+                    continue
 
-            candidates = _json_candidates(data)
-            dev_id = get_device_id(f"AWS: {account_name}")
-            counts["aws_files"] += 1
+                candidates = _json_candidates(data)
+                dev_id = get_device_id(f"AWS: {account_name}")
+                counts["aws_files"] += 1
 
-            for item in candidates:
-                cursor.execute(
-                    """
-                    INSERT INTO records
-                        (device_id, platform, category, filename, name, data)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        dev_id,
-                        "aws",
-                        service_type,
-                        path.name,
-                        _aws_record_name(item),
-                        json.dumps(item),
-                    ),
-                )
-                counts["aws_records"] += 1
+                for item in candidates:
+                    cursor.execute(
+                        """
+                        INSERT INTO records
+                            (device_id, platform, category, filename, name, data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            dev_id,
+                            "aws",
+                            service_type,
+                            path.name,
+                            _aws_record_name(item),
+                            json.dumps(item),
+                        ),
+                    )
+                    counts["aws_records"] += 1
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
     return counts
 
 
