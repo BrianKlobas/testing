@@ -24,6 +24,13 @@ def init_db(db_file: Path):
             data TEXT,           
             FOREIGN KEY(device_id) REFERENCES devices(id)
         );
+        
+        -- Performance Indexes for sorting and filtering
+        CREATE INDEX IF NOT EXISTS idx_records_platform ON records(platform);
+        CREATE INDEX IF NOT EXISTS idx_records_category ON records(category);
+        CREATE INDEX IF NOT EXISTS idx_records_name ON records(name);
+        CREATE INDEX IF NOT EXISTS idx_records_device_id ON records(device_id);
+
         CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
             name, data, content='records', content_rowid='id'
         );
