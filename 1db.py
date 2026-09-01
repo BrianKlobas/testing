@@ -120,9 +120,13 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                     (query, limit)
                 )
             else:
-                # Sanitize query for FTS5 to avoid syntax errors with special characters
+                # Sanitize query and format safely for FTS5 prefix searching
                 clean_query = ''.join(c if c.isalnum() or c.isspace() else ' ' for c in query).strip()
-                fts_query = f'"{clean_query}"*' if clean_query and " " not in clean_query else (clean_query or query)
+                terms = clean_query.split()
+                if terms:
+                    fts_query = " ".join([f"{t}*" for t in terms])
+                else:
+                    fts_query = query
                 
                 try:
                     cursor.execute(
