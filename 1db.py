@@ -168,6 +168,8 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
             return {"query": query, "count": len(results), "results": results}
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()  # This will now print the exact error to your terminal!
             return {"error": str(e), "query": query, "count": 0, "results": []}
 
 PANOS = InfrastructureDataSource()
