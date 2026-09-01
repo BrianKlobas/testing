@@ -88,36 +88,44 @@ async function executePolicyLookup() {
         const res = await fetch("/api/policy-lookup?" + params.toString());
         const data = await res.json();
 
-        // Dynamically check multiple possible keys returned by the backend
         const rules = data.rules || data.matched_rules || data.results || (Array.isArray(data) ? data : []);
 
         if (rules.length > 0) {
             let html = `<div class="section"><div class="section-title"><h2>Matching Rules & Intersections</h2><span class="count">${rules.length} Rules Found</span></div>`;
             
-            // Loop and safely catch rendering issues for individual items
-            for (const x of rules) {
-                try {
-                    html += itemHTML(x, "palo");
-                } catch (renderErr) {
-                    html += `<div class="item" style="color: #f87171;">Error rendering item: ${esc(renderErr.message)}<pre>${jsonStr(x)}</pre></div>`;
-                }
-            }
+            html += `<div style="padding: 16px;">`;
+            rules.forEach((rule, idx) => {
+                const ruleName = rule.name || rule.rule_name || `Rule #${idx + 1}`;
+                const action = rule.action || 'allow';
+                const actionColor = action.toLowerCase() === 'deny' || action.toLowerCase() === 'drop' ? '#f87171' : '#34d399';
+                
+                html += `
+                    <div style="background: #1e1f24; border: 1px solid #333; border-radius: 6px; padding: 14px; margin-bottom: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #2f3036; padding-bottom: 8px;">
+                            <b style="font-size: 15px; color: #fff;">${esc(ruleName)}</b>
+                            <span style="font-size: 11px; background: ${actionColor}22; color: ${actionColor}; border: 1px solid ${actionColor}55; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">${esc(action)}</span>
+                        </div>
+                        <div style="font-size: 13px; color: #cbd5e1; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px;">
+                            <div><b>Source:</b> ${esc(formatField(rule.source || rule.src))}</div>
+                            <div><b>Destination:</b> ${esc(formatField(rule.destination || rule.dst))}</div>
+                            <div><b>Service:</b> ${esc(formatField(rule.service || rule.port))}</div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += `</div></div>`;
             
-            html += `</div>`;
             document.getElementById("policyLookupOutput").innerHTML = html;
         } else {
-            // If keys don't match, display the raw JSON directly so you can see its layout
-            document.getElementById("policyLookupOutput").innerHTML = `
-                <div class="empty">
-                    <p>Query returned data, but no matching rule array was found.</p>
-                    <details style="margin-top: 10px; text-align: left;">
-                        <summary>View Raw JSON Payload</summary>
-                        <pre>${jsonStr(data)}</pre>
-                    </details>
-                </div>
-            `;
+            document.getElementById("policyLookupOutput").innerHTML = `<div class="empty">No matching records found.</div>`;
         }
     } catch (err) {
         document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Error: ${esc(err.message)}</div>`;
     }
+}
+
+function formatField(val) {
+    if (!val) return 'Any';
+    if (Array.isArray(val)) return val.join(', ');
+    return val;
 }
