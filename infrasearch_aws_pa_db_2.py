@@ -576,9 +576,11 @@ class InfrastructureDataSource:
                     for target in targets:
                         target_net = extract_ip_or_cidr(target)
                         if cidr_net and target_net:
-                            if cidr_net.overlaps(target_net) or cidr_net.subnet_of(target_net) or target_net.subnet_of(cidr_net):
-                                is_match = True
-                                break
+                            # Ensure both are the same IP version (v4 vs v6) to prevent TypeErrors
+                            if cidr_net.version == target_net.version:
+                                if cidr_net.overlaps(target_net) or cidr_net.subnet_of(target_net) or target_net.subnet_of(cidr_net):
+                                    is_match = True
+                                    break
                         elif target and sqlite_ip_contains(cidr, target):
                             is_match = True
                             break
