@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import json
+import os
 from flask import Flask, jsonify, render_template, request
 from database import PANOS, DB_PATH, get_db
 
@@ -11,20 +12,35 @@ PAN_TOPOLOGY_PATH = Path("panorama_topology.json").resolve()
 AWS_DATA_ROOT = Path("aws_parsed").resolve()
 FW_DATA_ROOT = Path("parsed").resolve()
 
-def get_file_modified_time(filepath: Path) -> str:
-    return "N/A" if not filepath.exists() else Path(filepath).stat().st_mtime.__str__()
-
 @app.route("/")
 def index():
     return render_template("index.html")
 
 @app.route("/api/info")
 def api_info():
-    return jsonify({"files": PANOS.files_count(), "devices": PANOS.devices_count()})
+    return jsonify({
+        "files": PANOS.files_count(), 
+        "devices": PANOS.devices_count()
+    })
 
 @app.route("/api/stats")
 def api_stats():
     return jsonify(PANOS.get_stats())
+
+@app.route("/api/metadata")
+def api_metadata():
+    """Provides last run timestamps and file metadata for the frontend."""
+    db_mtime = "N/A"
+    if DB_PATH.exists():
+        mtime_epoch = DB_PATH.stat().st_mtime
+        db_mtime = os.path.fromtimestamp(mtime_epoch).strftime("%Y-%m-%d %H:%M:%S") if hasattr(os, 'path') else str(mtime_epoch)
+        
+    return jsonify({
+        "last_run": db_mtime,
+        "database_size_kb": round(DB_PATH.stat().st_size / 1024, 2) if DB_PATH.exists() else 0,
+        "panos_source_exists": FW_DATA_ROOT.exists(),
+        "aws_source_exists": AWS_DATA_ROOT.exists()
+    })
 
 @app.route("/api/investigate")
 def api_investigate():
