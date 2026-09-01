@@ -1,21 +1,48 @@
+#!/usr/bin/env python3
+"""
+database.py
+------------------------------------------------------------
+Database access layer for the Infra Intel dashboard.
+
+Owns:
+  - SQLite connection + schema management (get_db / init_db)
+  - IP / CIDR matching helpers (used both as a registered SQLite
+    function and directly in Python search logic)
+  - Small JSON-tree helpers used to pull values out of arbitrary
+    PAN-OS / AWS record payloads
+  - InfrastructureDataSource: all read-side query logic (stats,
+    investigate/search, policy lookup)
+
+This module does NOT parse source JSON files or write records into
+the database — that's ingest.py's job. app.py and ingest.py both
+import from here so there is a single source of truth for the
+schema and the query logic.
+
+Note on DB_PATH: mirrors the original monolith's behavior where the
+module-level DB_PATH is resolved *at call time* (not captured at
+construction). InfrastructureDataSource() without an explicit
+db_file will always use whatever database.DB_PATH currently points
+to, so app.py can do `database.DB_PATH = <path from --db arg>`
+after argparse and have it take effect everywhere.
+"""
+
 from __future__ import annotations
 
 import ipaddress
 import json
 import os
-import sqlite3
 import re
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 DB_PATH = Path("infra_intel.db")
-DEFAULT_DB_PATH = DB_PATH
-FW_DATA_ROOT = Path("parsed").resolve()
-AWS_DATA_ROOT = Path("aws_parsed").resolve()
-ORG_FILE_PATH = Path("org_topology.json").resolve()
-PAN_TOPOLOGY_PATH = Path("panorama_topology.json").resolve()
 
+
+# ----------------------------------------------------------------------
+# IP and Subnet Matching Helpers
+# ----------------------------------------------------------------------
 
 def extract_ip_or_cidr(val: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
     if not val:
@@ -32,13 +59,13 @@ def extract_ip_or_cidr(val: str) -> ipaddress.IPv4Network | ipaddress.IPv6Networ
 def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
     if not target_str or not cidr_or_range_str:
         return 0
-    
+
     target_net = extract_ip_or_cidr(target_str)
     if not target_net:
         return 0
 
     val = str(cidr_or_range_str).strip()
-    
+
     if "-" in val and "/" not in val:
         parts = val.split("-")
         if len(parts) == 2:
@@ -51,17 +78,13 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
 
     fw_net = extract_ip_or_cidr(val)
     if fw_net:
+        # Adjusted to catch both overlaps and when a target /32 falls inside a larger /16 or /20
         try:
             return 1 if target_net.overlaps(fw_net) or target_net.subnet_of(fw_net) or fw_net.subnet_of(target_net) else 0
         except ValueError:
             return 1 if target_net.overlaps(fw_net) else 0
-        
+
     return 0
-
-
-def classify_ip_search(val: str) -> str:
-    net = extract_ip_or_cidr(val)
-    return "ip_or_cidr" if net else "text"
 
 
 def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
@@ -89,9 +112,13 @@ def extract_direct_attached_sg_ids(item: dict[str, Any]) -> set[str]:
                             gid = g.get("GroupId") or g.get("VpcSecurityGroupId")
                             if gid and str(gid).startswith("sg-"):
                                 sg_ids.add(str(gid))
-                                
+
     return sg_ids
 
+
+# ----------------------------------------------------------------------
+# File freshness helpers (used by /api/automation/status in app.py)
+# ----------------------------------------------------------------------
 
 def get_file_modified_time(filepath: Path) -> str:
     if filepath.exists():
@@ -114,6 +141,10 @@ def get_latest_dir_mtime(dirpath: Path) -> str:
     return "N/A"
 
 
+# ----------------------------------------------------------------------
+# Connection / Schema
+# ----------------------------------------------------------------------
+
 def get_db(db_file: Path | None = None):
     if db_file is None:
         db_file = DB_PATH
@@ -128,7 +159,7 @@ def init_db(db_file: Path | None = None):
         db_file = DB_PATH
     if db_file.exists():
         db_file.unlink()
-        
+
     conn = get_db(db_file)
     cursor = conn.cursor()
 
@@ -144,8 +175,8 @@ def init_db(db_file: Path | None = None):
             platform TEXT,
             category TEXT,
             filename TEXT,
-            name TEXT,           
-            data TEXT,           
+            name TEXT,
+            data TEXT,
             FOREIGN KEY(device_id) REFERENCES devices(id)
         );
 
@@ -161,24 +192,10 @@ def init_db(db_file: Path | None = None):
     conn.close()
 
 
-def find_key_recursively(obj: Any, keys: list[str]) -> Any:
-    if not isinstance(obj, dict):
-        return None
-    for k in keys:
-        if k in obj:
-            return obj[k]
-    for k, v in obj.items():
-        if isinstance(v, dict):
-            res = find_key_recursively(v, keys)
-            if res is not None:
-                return res
-        elif isinstance(v, list):
-            for item in v:
-                res = find_key_recursively(item, keys)
-                if res is not None:
-                    return res
-    return None
-
+# ----------------------------------------------------------------------
+# JSON-tree helpers (ported from the frontend's JS extractValues /
+# findKeyRecursively so policy-lookup can run server-side in Python)
+# ----------------------------------------------------------------------
 
 def extract_values(obj: Any) -> list[str]:
     if obj is None:
@@ -186,7 +203,7 @@ def extract_values(obj: Any) -> list[str]:
     if isinstance(obj, (str, int, float, bool)):
         return [str(obj)]
     if isinstance(obj, list):
-        results = []
+        results: list[str] = []
         for item in obj:
             results.extend(extract_values(item))
         return results
@@ -198,18 +215,45 @@ def extract_values(obj: Any) -> list[str]:
             results.extend(extract_values(obj["entry"]))
         if "#text" in obj:
             results.append(str(obj["#text"]))
-        if "name" in obj and isinstance(obj["name"], str):
+        if isinstance(obj.get("name"), str):
             results.append(obj["name"])
         if "@name" in obj:
             results.append(str(obj["@name"]))
+
         if results:
             return results
+
         for k, v in obj.items():
             if not str(k).startswith("@"):
                 results.extend(extract_values(v))
         return results
     return []
 
+
+def find_key_recursively(obj: Any, keys: list[str]) -> Any:
+    if isinstance(obj, dict):
+        for k in keys:
+            if k in obj:
+                return obj[k]
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                found = find_key_recursively(v, keys)
+                if found is not None:
+                    return found
+        return None
+    if isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, (dict, list)):
+                found = find_key_recursively(item, keys)
+                if found is not None:
+                    return found
+        return None
+    return None
+
+
+# ----------------------------------------------------------------------
+# Search / Query Layer
+# ----------------------------------------------------------------------
 
 class InfrastructureDataSource:
     def __init__(self, db_file: Path | None = None):
@@ -222,10 +266,10 @@ class InfrastructureDataSource:
     def get_stats(self) -> dict[str, Any]:
         conn = get_db(self.db_file)
         cursor = conn.cursor()
-        
+
         cursor.execute("SELECT category, COUNT(*) as cnt FROM records WHERE platform='panos' GROUP BY category")
         panos_counts = {row["category"]: row["cnt"] for row in cursor.fetchall()}
-        
+
         cursor.execute("SELECT category, COUNT(*) as cnt FROM records WHERE platform='aws' GROUP BY category")
         aws_summary = {row["category"]: row["cnt"] for row in cursor.fetchall()}
 
@@ -255,10 +299,10 @@ class InfrastructureDataSource:
     def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         query = query.strip()
         query_network = extract_ip_or_cidr(query)
-        
+
         output = {
             "query": query,
-            "query_type": classify_ip_search(query),
+            "query_type": "ip_or_cidr" if query_network else "text",
             "matched_objects": [],
             "matched_rules": [],
             "all_entries_matches": [],
@@ -282,7 +326,7 @@ class InfrastructureDataSource:
         if query_network:
             target_ip = str(query_network.network_address)
             target_cidr = query_network.compressed
-            
+
             cursor.execute("""
                 SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
                 FROM records r
@@ -290,7 +334,7 @@ class InfrastructureDataSource:
                 WHERE r.platform = 'aws' AND (r.data LIKE ? OR r.data LIKE ?)
                 LIMIT ?
             """, (f"%{target_ip}%", f"%{target_cidr}%", limit))
-            
+
             for row in cursor.fetchall():
                 if row["id"] not in matched_aws_record_ids:
                     matched_aws_record_ids.add(row["id"])
@@ -307,7 +351,7 @@ class InfrastructureDataSource:
                     WHERE r.platform = 'aws' AND records_fts MATCH ?
                     LIMIT ?
                 """, (fts_query, limit))
-                
+
                 for row in cursor.fetchall():
                     if row["id"] not in matched_aws_record_ids:
                         matched_aws_record_ids.add(row["id"])
@@ -325,7 +369,7 @@ class InfrastructureDataSource:
             })
 
             dev_name = row["device"]
-            
+
             direct_sgs = extract_direct_attached_sg_ids(item)
             for sg_id in direct_sgs:
                 attached_sg_ids.add((dev_name, sg_id))
@@ -333,10 +377,12 @@ class InfrastructureDataSource:
             subnet_id = item.get("SubnetId")
             vpc_id = item.get("VpcId")
 
+            # 1. Directly check if matched item has a CidrBlock (Subnet/VPC)
             item_cidr = item.get("CidrBlock")
             if item_cidr:
                 related_cidrs_to_match.add(item_cidr)
 
+            # 2. Check all account subnets to see if our query IP falls inside them
             cursor.execute("""
                 SELECT data FROM records r JOIN devices d ON r.device_id = d.id
                 WHERE (r.category LIKE '%subnet%') AND d.name = ?
@@ -349,6 +395,7 @@ class InfrastructureDataSource:
                     if s_net and query_network.subnet_of(s_net):
                         related_cidrs_to_match.add(s_cidr)
 
+            # 3. Check all account VPCs to see if our query IP falls inside them
             cursor.execute("""
                 SELECT data FROM records r JOIN devices d ON r.device_id = d.id
                 WHERE (r.category LIKE '%vpc%') AND d.name = ?
@@ -391,38 +438,40 @@ class InfrastructureDataSource:
                         if isinstance(block, dict) and block.get("CidrBlock"):
                             related_cidrs_to_match.add(block["CidrBlock"])
 
-        all_target_nets = [query_network] if query_network else []
-        for c_str in related_cidrs_to_match:
-            net_obj = extract_ip_or_cidr(c_str)
-            if net_obj:
-                all_target_nets.append(net_obj)
+            # Immediately following the AWS loop, run the Palo Alto lookup block
+            # so it utilizes the newly discovered subnets/VPCs from related_cidrs_to_match:
+            all_target_nets = [query_network] if query_network else []
+            for c_str in related_cidrs_to_match:
+                net_obj = extract_ip_or_cidr(c_str)
+                if net_obj:
+                    all_target_nets.append(net_obj)
 
-        cursor.execute("""
-            SELECT r.id, r.name, r.category, r.data, d.name as device_name 
-            FROM records r JOIN devices d ON r.device_id = d.id 
-            WHERE r.category LIKE '%object%' OR r.category LIKE '%address%' OR r.category LIKE '%group%'
-        """)
-        
-        for row in cursor.fetchall():
-            try:
-                p_data = json.loads(row["data"])
-                p_val = p_data.get("ip_net") or p_data.get("address") or p_data.get("value") or row["name"]
-                p_net = extract_ip_or_cidr(str(p_val))
-                
-                if p_net:
-                    for t_net in all_target_nets:
-                        if t_net.subnet_of(p_net) or p_net.subnet_of(t_net) or t_net == t_net:
-                            output["palo_matches"].append({
-                                "device": row["device_name"],
-                                "type": row["category"],
-                                "file": "",
-                                "name": row["name"],
-                                "data": p_data
-                            })
-                            break
-            except Exception:
-                continue
-                          
+            cursor.execute("""
+                SELECT r.id, r.name, r.category, r.data, d.name as device_name
+                FROM records r JOIN devices d ON r.device_id = d.id
+                WHERE r.category LIKE '%object%' OR r.category LIKE '%address%' OR r.category LIKE '%group%'
+            """)
+
+            for row2 in cursor.fetchall():
+                try:
+                    p_data = json.loads(row2["data"])
+                    p_val = p_data.get("ip_net") or p_data.get("address") or p_data.get("value") or row2["name"]
+                    p_net = extract_ip_or_cidr(str(p_val))
+
+                    if p_net:
+                        for t_net in all_target_nets:
+                            if t_net.subnet_of(p_net) or p_net.subnet_of(t_net) or t_net == t_net:
+                                output["palo_matches"].append({
+                                    "device": row2["device_name"],
+                                    "type": row2["category"],
+                                    "file": "",
+                                    "name": row2["name"],
+                                    "data": p_data
+                                })
+                                break
+                except Exception:
+                    continue
+
         for dev_name, sg_id in attached_sg_ids:
             cursor.execute("""
                 SELECT r.id, d.name as device, r.category, r.filename, r.name, r.data
@@ -431,7 +480,7 @@ class InfrastructureDataSource:
                 WHERE (r.category = 'security_groups' OR r.category = 'security_group' OR r.category LIKE '%security-group%')
                   AND (r.name = ? OR json_extract(r.data, '$.GroupId') = ?) AND d.name = ?
             """, (sg_id, sg_id, dev_name))
-            
+
             for sg_row in cursor.fetchall():
                 sg_item = json.loads(sg_row["data"])
                 exists = any(s.get("record_id") == sg_row["id"] for s in output["attached_security_groups"])
@@ -454,7 +503,7 @@ class InfrastructureDataSource:
             JOIN devices d ON r.device_id = d.id
             WHERE r.platform = 'panos'
         """)
-        
+
         all_panos_records = cursor.fetchall()
 
         def classify_and_append_panos(row_dict, item_payload):
@@ -495,15 +544,11 @@ class InfrastructureDataSource:
                 return targets
 
             for row in all_panos_records:
-                row_data_str = row["data"]
-                if related_cidrs_to_match and not any(cidr.split('/')[0] in row_data_str for cidr in related_cidrs_to_match):
-                    continue
-
                 try:
-                    item_data = json.loads(row_data_str)
+                    item_data = json.loads(row["data"])
                 except Exception:
                     continue
-                
+
                 is_match = False
                 targets = get_panos_targets(item_data)
 
@@ -522,7 +567,7 @@ class InfrastructureDataSource:
                                     is_match = True
                                     break
                             except Exception:
-                                continue
+                                continue  # Safely skip non-IP object names like group labels
                         if is_match:
                             break
                     except Exception:
@@ -584,3 +629,70 @@ class InfrastructureDataSource:
 
         conn.close()
         return output
+
+    def policy_lookup(self, src_query: str, dst_query: str, port_query: str) -> list[dict[str, Any]]:
+        """Search PAN-OS security/NAT rules by source, destination, and/or service/port."""
+        src_query = (src_query or "").strip().lower()
+        dst_query = (dst_query or "").strip().lower()
+        port_query = (port_query or "").strip().lower()
+
+        conn = get_db(self.db_file)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT r.id, d.name as device, r.platform, r.category, r.filename, r.name, r.data
+            FROM records r
+            JOIN devices d ON r.device_id = d.id
+            WHERE r.platform = 'panos' AND (r.category LIKE '%rule%' OR r.category LIKE '%policy%' OR r.category LIKE '%nat%')
+        """)
+
+        matched_rules = []
+        rows = cursor.fetchall()
+        conn.close()
+
+        for row in rows:
+            try:
+                item_data = json.loads(row["data"])
+            except json.JSONDecodeError:
+                continue
+
+            d = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+            if not isinstance(d, dict):
+                continue
+
+            sources = [str(x).lower() for x in extract_values(find_key_recursively(d, ['source']))]
+            destinations = [str(x).lower() for x in extract_values(find_key_recursively(d, ['destination', 'dest']))]
+            services = [str(x).lower() for x in extract_values(find_key_recursively(d, ['service', 'port']))]
+
+            def matches_any(query_str, value_list):
+                if not query_str:
+                    return True
+                if "any" in value_list:
+                    return True
+                for val in value_list:
+                    if query_str in val or val in query_str:
+                        return True
+                    if sqlite_ip_contains(query_str, val) or sqlite_ip_contains(val, query_str):
+                        return True
+                return False
+
+            src_match = matches_any(src_query, sources) if src_query else True
+            dst_match = matches_any(dst_query, destinations) if dst_query else True
+            port_match = matches_any(port_query, services) if port_query else True
+
+            if src_query and not src_match:
+                continue
+            if dst_query and not dst_match:
+                continue
+            if port_query and not port_match:
+                continue
+
+            matched_rules.append({
+                "device": row["device"],
+                "type": row["category"],
+                "file": row["filename"],
+                "name": row["name"],
+                "data": item_data
+            })
+
+        return matched_rules
