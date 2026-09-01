@@ -973,6 +973,5 @@ def main() -> None:
     print("[*] app.py does not ingest. Run ingest.py when parsed JSON changes.")
     app.run(host=args.host, port=args.port, debug=args.debug)
 
-
 if __name__ == "__main__":
     main()
