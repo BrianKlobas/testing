@@ -642,7 +642,7 @@ class InfrastructureDataSource:
         matched_obj_names = set()
         for rec in all_records:
             cat = rec["category"]
-            if "rule" in cat or "security" in cat:
+            if "security_rules" in cat or "nat_rules" in cat:
                 continue
     
             # Check if query matches object name or its raw values
@@ -673,7 +673,7 @@ class InfrastructureDataSource:
         # 2. Recursively find all parent groups containing these objects/IPs
         group_map = {}
         for rec in all_records:
-            if "group" in rec["category"]:
+            if "address_groups" in rec["category"]:
                 g_data = rec["data"]
                 for k in ["static", "member"]:
                     val = g_data.get(k, [])
@@ -704,7 +704,7 @@ class InfrastructureDataSource:
     
         # 3. Match rules containing any of the expanded objects/groups or matching strings
         for rec in all_records:
-            if "rule" in rec["category"] or "security" in rec["category"]:
+            if "security_rules" in rec["category"] or "nat_rules" in rec["category"]:
                 r_data = rec["data"]
                 r_name = rec["name"]
                 
