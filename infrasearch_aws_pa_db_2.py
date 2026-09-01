@@ -79,7 +79,11 @@ def sqlite_ip_contains(target_str: str, cidr_or_range_str: str) -> int:
 
     fw_net = extract_ip_or_cidr(val)
     if fw_net:
-        return 1 if target_net.overlaps(fw_net) else 0
+        # Adjusted to catch both overlaps and when a target /32 falls inside a larger /16 or /20
+        try:
+            return 1 if target_net.overlaps(fw_net) or target_net.subnet_of(fw_net) or fw_net.subnet_of(target_net) else 0
+        except ValueError:
+            return 1 if target_net.overlaps(fw_net) else 0
         
     return 0
 
@@ -565,10 +569,16 @@ class InfrastructureDataSource:
                                 targets.append(mem)
                             elif isinstance(mem, list):
                                 targets.extend([str(x) for x in mem if isinstance(x, str)])
-
+                              
                 for cidr in related_cidrs_to_match:
+                    cidr_net = extract_ip_or_cidr(cidr)
                     for target in targets:
-                        if target and sqlite_ip_contains(cidr, target):
+                        target_net = extract_ip_or_cidr(target)
+                        if cidr_net and target_net:
+                            if cidr_net.overlaps(target_net) or cidr_net.subnet_of(target_net) or target_net.subnet_of(cidr_net):
+                                is_match = True
+                                break
+                        elif target and sqlite_ip_contains(cidr, target):
                             is_match = True
                             break
                     if is_match:
