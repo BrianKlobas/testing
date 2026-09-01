@@ -576,73 +576,180 @@ class InfrastructureDataSource:
             return output
         finally:
             conn.close()
+            
+def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> list[dict[str, Any]]:
+    """Lookup Palo Alto rules and resolve object groups for source, destination, and port."""
+    source = source.strip()
+    destination = destination.strip()
+    port = port.strip()
 
-    def policy_lookup(self, src_query: str = "", dst_query: str = "", port_query: str = "") -> list[dict[str, Any]]:
-        """Find PAN-OS rules where source, destination and optional service all intersect."""
-        src_query = src_query.strip().lower()
-        dst_query = dst_query.strip().lower()
-        port_query = port_query.strip().lower()
+    matched_rules = []
+    conn = get_db(self.db_file)
+    cursor = conn.cursor()
 
-        conn = get_db(self.db_file)
-        try:
-            rows = conn.execute(
-                """
-                SELECT r.id, d.name AS device, r.platform, r.category,
-                       r.filename, r.name, r.data
-                FROM records r
-                JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos'
-                  AND (r.category LIKE '%rule%'
-                    OR r.category LIKE '%policy%'
-                    OR r.category LIKE '%nat%')
-                """
-            ).fetchall()
+    try:
+        # Load all PAN-OS address objects/groups and rule records for resolution
+        cursor.execute(
+            """
+            SELECT r.id, r.name, r.category, r.data, d.name AS device_name
+            FROM records r JOIN devices d ON r.device_id = d.id
+            WHERE r.platform = 'panos'
+            """
+        )
+        all_records = cursor.fetchall()
+        
+        object_map = {}
+        rule_records = []
 
-            matched_rules: list[dict[str, Any]] = []
-            for row in rows:
-                try:
-                    item_data = json.loads(row["data"])
-                except json.JSONDecodeError:
+        for row in all_records:
+            try:
+                item_data = json.loads(row["data"])
+            except json.JSONDecodeError:
+                continue
+            
+            cat = row["category"].lower()
+            name = row["name"] or item_data.get("name") or ""
+            if name:
+                object_map[name] = item_data
+
+            if "rule" in cat or "security" in cat:
+                rule_records.append((row, item_data))
+
+        def resolve_object_members(obj_name: str) -> set[str]:
+            """Recursively resolve nested address/service groups."""
+            members = {obj_name}
+            stack = [obj_name]
+            visited = set()
+            while stack:
+                curr = stack.pop()
+                if curr in visited:
                     continue
-
-                rule = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
-                if not isinstance(rule, dict):
+                visited.add(curr)
+                obj_data = object_map.get(curr)
+                if not obj_data:
                     continue
+                # Check for group static/dynamic members
+                eval_obj = obj_data.get("entry", obj_data) if isinstance(obj_data, dict) else obj_data
+                if isinstance(eval_obj, dict):
+                    # Check address group members
+                    for member_key in ["static", "member"]:
+                        m_list = eval_obj.get(member_key, [])
+                        if isinstance(m_list, str):
+                            m_list = [m_list]
+                        for m in m_list:
+                            if m not in visited:
+                                members.add(m)
+                                stack.append(m)
+            return members
 
-                sources = [x.lower() for x in _extract_values(_find_key_recursively(rule, ["source"]))]
-                destinations = [x.lower() for x in _extract_values(_find_key_recursively(rule, ["destination", "dest"]))]
-                services = [x.lower() for x in _extract_values(_find_key_recursively(rule, ["service", "port"]))]
+        src_net = extract_ip_or_cidr(source) if source else None
+        dst_net = extract_ip_or_cidr(destination) if destination else None
 
-                def matches_any(query_str: str, values: list[str]) -> bool:
-                    if not query_str:
-                        return True
-                    if "any" in values:
-                        return True
-                    for value in values:
-                        if query_str in value or value in query_str:
-                            return True
-                        if sqlite_ip_contains(query_str, value) or sqlite_ip_contains(value, query_str):
-                            return True
-                    return False
+        for row, item_data in rule_records:
+            eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+            if not isinstance(eval_obj, dict):
+                continue
 
-                if src_query and not matches_any(src_query, sources):
-                    continue
-                if dst_query and not matches_any(dst_query, destinations):
-                    continue
-                if port_query and not matches_any(port_query, services):
-                    continue
+            rule_name = row["name"] or eval_obj.get("@name") or eval_obj.get("name", "Unknown")
+            
+            # Extract rule fields
+            src_field = eval_obj.get("source", {}).get("member", [])
+            dst_field = eval_obj.get("destination", {}).get("member", [])
+            srv_field = eval_obj.get("service", {}).get("member", [])
 
+            if isinstance(src_field, str): src_field = [src_field]
+            if isinstance(dst_field, str): dst_field = [dst_field]
+            if isinstance(srv_field, str): srv_field = [srv_field]
+
+            # Expand groups
+            expanded_sources = set()
+            for s in src_field:
+                expanded_sources.update(resolve_object_members(s))
+
+            expanded_dests = set()
+            for d in dst_field:
+                expanded_dests.update(resolve_object_members(d))
+
+            match_found = True
+            match_reasons = []
+
+            # Check source filter
+            if source:
+                src_matched = False
+                for es in expanded_sources:
+                    if source.lower() in es.lower():
+                        src_matched = True
+                        break
+                    if src_net:
+                        obj_data = object_map.get(es)
+                        if obj_data:
+                            o_eval = obj_data.get("entry", obj_data) if isinstance(obj_data, dict) else obj_data
+                            val = o_eval.get("ip-netmask") or o_eval.get("address") or es
+                            o_net = extract_ip_or_cidr(str(val))
+                            if o_net and src_net.overlaps(o_net):
+                                src_matched = True
+                                break
+                if not src_matched:
+                    match_found = False
+                else:
+                    match_reasons.append(f"Source matches '{source}'")
+
+            # Check destination filter
+            if destination and match_found:
+                dst_matched = False
+                for ed in expanded_dests:
+                    if destination.lower() in ed.lower():
+                        dst_matched = True
+                        break
+                    if dst_net:
+                        obj_data = object_map.get(ed)
+                        if obj_data:
+                            o_eval = obj_data.get("entry", obj_data) if isinstance(obj_data, dict) else obj_data
+                            val = o_eval.get("ip-netmask") or o_eval.get("address") or ed
+                            o_net = extract_ip_or_cidr(str(val))
+                            if o_net and dst_net.overlaps(o_net):
+                                dst_matched = True
+                                break
+                if not dst_matched:
+                    match_found = False
+                else:
+                    match_reasons.append(f"Destination matches '{destination}'")
+
+            # Check port filter
+            if port and match_found:
+                port_matched = False
+                for srv in srv_field:
+                    if port.lower() in srv.lower():
+                        port_matched = True
+                        break
+                    obj_data = object_map.get(srv)
+                    if obj_data:
+                        o_eval = obj_data.get("entry", obj_data) if isinstance(obj_data, dict) else obj_data
+                        port_val = str(o_eval.get("protocol", {})) + str(o_eval.get("port", ""))
+                        if port.lower() in port_val.lower():
+                            port_matched = True
+                            break
+                if not port_matched:
+                    match_found = False
+                else:
+                    match_reasons.append(f"Port matches '{port}'")
+
+            if match_found and (source or destination or port):
                 matched_rules.append({
-                    "device": row["device"],
-                    "type": row["category"],
-                    "file": row["filename"],
-                    "name": row["name"],
+                    "device": row["device_name"],
+                    "rule_name": rule_name,
+                    "category": row["category"],
+                    "sources": list(expanded_sources),
+                    "destinations": list(expanded_dests),
+                    "services": srv_field,
+                    "match_reasons": match_reasons,
                     "data": item_data,
                 })
 
-            return matched_rules
-        finally:
-            conn.close()
+    finally:
+        conn.close()
+
+    return matched_rules
 
 
 DATA = InfrastructureDataSource()
@@ -719,6 +826,14 @@ def api_policy_lookup():
     except Exception as exc:
         app.logger.exception("Policy lookup failed")
         return jsonify({"error": str(exc)}), 500
+
+@app.route("/search_rules", methods=["GET"])
+def api_search_rules():
+    source = request.args.get("source", "").strip()
+    destination = request.args.get("destination", "").strip()
+    port = request.args.get("port", "").strip()
+    results = investigator.search_rules(source=source, destination=destination, port=port)
+    return jsonify(results)
 
 
 def main() -> None:
