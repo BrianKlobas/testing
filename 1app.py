@@ -578,18 +578,19 @@ class InfrastructureDataSource:
             conn.close()
             
     def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> dict[str, Any]:
-        """Exhaustively lookup matching Palo Alto objects, groups, and security rules."""
+        """Exhaustive Palo Alto policy lookup supporting addresses, groups, and security rules."""
         source = source.strip()
         destination = destination.strip()
         port = port.strip()
-    
+
         output = {
             "query": {"source": source, "destination": destination, "port": port},
             "matched_objects": [],
             "matched_groups": [],
-            "matched_rules": []
+            "matched_rules": [],
+            "debug": {}
         }
-    
+
         conn = get_db(self.db_file)
         cursor = conn.cursor()
         try:
@@ -597,202 +598,235 @@ class InfrastructureDataSource:
                 """
                 SELECT r.id, r.name, r.category, r.data, d.name AS device_name
                 FROM records r JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos'
+                WHERE LOWER(r.platform) LIKE '%pan%'
                 """
             )
             rows = cursor.fetchall()
         finally:
             conn.close()
-    
+
+        output["debug"]["total_panos_records"] = len(rows)
         if not rows:
             return output
-    
-        address_objects = {}
-        address_groups = {}
+
+        def to_net(ip_str):
+            if not ip_str:
+                return None
+            try:
+                ip_clean = str(ip_str).strip().split('/')[0] if '/' not in str(ip_str) else str(ip_str).strip()
+                if 'extract_ip_or_cidr' in globals():
+                    res = extract_ip_or_cidr(ip_clean)
+                    if res: return res
+                import ipaddress
+                return ipaddress.ip_network(ip_clean, strict=False)
+            except Exception:
+                return None
+
+        def extract_all_values(obj):
+            vals = set()
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    vals.update(extract_all_values(v))
+            elif isinstance(obj, list):
+                for item in obj:
+                    vals.update(extract_all_values(item))
+            elif isinstance(obj, (str, int, float)):
+                s = str(obj).strip()
+                if s:
+                    vals.add(s)
+            return vals
+
+        src_net = to_net(source) if source else None
+        dst_net = to_net(destination) if destination else None
+
+        address_objects = []
+        address_groups = []
         security_rules = []
-    
-        src_net = extract_ip_or_cidr(source) if source else None
-        dst_net = extract_ip_or_cidr(destination) if destination else None
-    
+
         for row in rows:
             cat = str(row["category"]).lower()
             try:
-                item = json.loads(row["data"])
-            except json.JSONDecodeError:
+                item_data = json.loads(row["data"])
+            except Exception:
                 continue
-    
-            eval_item = item.get("entry", item) if isinstance(item, dict) else item
-            if not isinstance(eval_item, dict):
-                eval_item = item
-    
-            name = row["name"] or eval_item.get("@name") or eval_item.get("name") or ""
-    
-            if "address_groups" in cat or ("address" in cat and "group" in cat):
-                if name:
-                    address_groups[name] = {"row": row, "data": eval_item}
-                    address_groups[name.lower()] = {"row": row, "data": eval_item}
-            elif "addresses" in cat or ("address" in cat and "group" not in cat):
-                if name:
-                    address_objects[name] = {"row": row, "data": eval_item}
-                    address_objects[name.lower()] = {"row": row, "data": eval_item}
-            elif "security_rules" in cat or "rule" in cat or "security" in cat:
-                security_rules.append((row, eval_item))
-    
-        def object_matches_query(obj_name: str, obj_data: dict, q_str: str, q_net) -> bool:
+
+            eval_data = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
+            if isinstance(eval_data, list) and len(eval_data) > 0:
+                eval_data = eval_data[0]
+            if not isinstance(eval_data, dict):
+                eval_data = {"value": eval_data}
+
+            entry_name = row["name"] or eval_data.get("@name") or eval_data.get("name") or ""
+            
+            record_info = {
+                "id": row["id"],
+                "name": str(entry_name),
+                "category": row["category"],
+                "device": row["device_name"],
+                "data": eval_data,
+                "raw_str": row["data"].lower(),
+                "all_values": extract_all_values(eval_data)
+            }
+
+            if "group" in cat:
+                address_groups.append(record_info)
+            elif "address" in cat or "object" in cat:
+                address_objects.append(record_info)
+            elif "rule" in cat or "security" in cat or "policy" in cat:
+                security_rules.append(record_info)
+            else:
+                if "static" in eval_data or "dynamic" in eval_data:
+                    address_groups.append(record_info)
+                elif "source" in eval_data and "destination" in eval_data:
+                    security_rules.append(record_info)
+                else:
+                    address_objects.append(record_info)
+
+        output["debug"]["counts"] = {
+            "address_objects": len(address_objects),
+            "address_groups": len(address_groups),
+            "security_rules": len(security_rules)
+        }
+
+        def matches_ip_or_query(obj_info, q_str, q_net):
             if not q_str:
+                return False
+            q_lower = q_str.lower()
+            if q_lower in obj_info["name"].lower() or q_lower in obj_info["raw_str"]:
                 return True
-            if q_str.lower() in obj_name.lower():
-                return True
-            for key in ["ip-netmask", "ip_netmask", "address", "ip_net", "value", "ip-range"]:
-                val = obj_data.get(key)
-                if val:
-                    val_str = str(val)
-                    if q_str.lower() in val_str.lower():
-                        return True
-                    val_net = extract_ip_or_cidr(val_str)
-                    if q_net and val_net and q_net.overlaps(val_net):
+            if q_net:
+                for val in obj_info["all_values"]:
+                    v_net = to_net(val)
+                    if v_net and q_net.overlaps(v_net):
                         return True
             return False
-    
-        matched_src_objs = set()
-        matched_dst_objs = set()
-    
-        for name, info in address_objects.items():
-            if name != name.title() and name == name.lower():
-                continue 
-            if source and object_matches_query(name, info["data"], source, src_net):
-                matched_src_objs.add(name)
-                if not any(o["name"] == name for o in output["matched_objects"]):
+
+        matched_src_entities = set()
+        if source:
+            matched_src_entities.add(source)
+            matched_src_entities.add(source.lower())
+            for obj in address_objects:
+                if matches_ip_or_query(obj, source, src_net):
+                    matched_src_entities.add(obj["name"])
+                    matched_src_entities.add(obj["name"].lower())
                     output["matched_objects"].append({
-                        "name": name,
-                        "category": info["row"]["category"],
-                        "device": info["row"]["device_name"],
-                        "data": info["data"]
+                        "name": obj["name"],
+                        "category": obj["category"],
+                        "device": obj["device"],
+                        "data": obj["data"]
                     })
-            if destination and object_matches_query(name, info["data"], destination, dst_net):
-                matched_dst_objs.add(name)
-                if not any(o["name"] == name for o in output["matched_objects"]):
-                    output["matched_objects"].append({
-                        "name": name,
-                        "category": info["row"]["category"],
-                        "device": info["row"]["device_name"],
-                        "data": info["data"]
-                    })
-    
-        if source and not matched_src_objs:
-            matched_src_objs.add(source)
-        if destination and not matched_dst_objs:
-            matched_dst_objs.add(destination)
-    
-        group_membership = {}
-        for g_name, g_info in address_groups.items():
-            if g_name != g_name.title() and g_name == g_name.lower():
-                continue
-            g_data = g_info["data"]
-            for key in ["static", "member"]:
-                val = g_data.get(key, [])
+
+        matched_dst_entities = set()
+        if destination:
+            matched_dst_entities.add(destination)
+            matched_dst_entities.add(destination.lower())
+            for obj in address_objects:
+                if matches_ip_or_query(obj, destination, dst_net):
+                    matched_dst_entities.add(obj["name"])
+                    matched_dst_entities.add(obj["name"].lower())
+                    if not any(o["name"] == obj["name"] for o in output["matched_objects"]):
+                        output["matched_objects"].append({
+                            "name": obj["name"],
+                            "category": obj["category"],
+                            "device": obj["device"],
+                            "data": obj["data"]
+                        })
+
+        expanded = True
+        while expanded:
+            expanded = False
+            for grp in address_groups:
+                g_name = grp["name"]
+                if source and g_name.lower() not in matched_src_entities:
+                    if any(val.lower() in matched_src_entities for val in grp["all_values"]) or matches_ip_or_query(grp, source, src_net):
+                        matched_src_entities.add(g_name)
+                        matched_src_entities.add(g_name.lower())
+                        expanded = True
+                        if not any(g["name"] == g_name for g in output["matched_groups"]):
+                            output["matched_groups"].append({
+                                "name": g_name,
+                                "category": grp["category"],
+                                "device": grp["device"],
+                                "data": grp["data"]
+                            })
+
+                if destination and g_name.lower() not in matched_dst_entities:
+                    if any(val.lower() in matched_dst_entities for val in grp["all_values"]) or matches_ip_or_query(grp, destination, dst_net):
+                        matched_dst_entities.add(g_name)
+                        matched_dst_entities.add(g_name.lower())
+                        expanded = True
+                        if not any(g["name"] == g_name for g in output["matched_groups"]):
+                            output["matched_groups"].append({
+                                "name": g_name,
+                                "category": grp["category"],
+                                "device": grp["device"],
+                                "data": grp["data"]
+                            })
+
+        matched_src_entities.add("any")
+        matched_dst_entities.add("any")
+
+        for rule in security_rules:
+            r_data = rule["data"]
+            
+            def extract_members(field):
+                val = r_data.get(field, {})
                 if isinstance(val, dict):
-                    val = val.get("member", [])
-                if isinstance(val, str):
-                    val = [val]
-                for m in val:
-                    if m:
-                        group_membership.setdefault(str(m), set()).add(g_name)
-    
-        def get_all_parent_groups(item_names: set[str]) -> set[str]:
-            all_groups = set()
-            stack = list(item_names)
-            visited = set()
-            while stack:
-                curr = stack.pop()
-                if curr in visited:
-                    continue
-                visited.add(curr)
-                parent_groups = group_membership.get(curr, set())
-                for pg in parent_groups:
-                    all_groups.add(pg)
-                    stack.append(pg)
-            return all_groups
-    
-        expanded_src_entities = set(matched_src_objs)
-        expanded_src_entities.update(get_all_parent_groups(matched_src_objs))
-    
-        expanded_dst_entities = set(matched_dst_objs)
-        expanded_dst_entities.update(get_all_parent_groups(matched_dst_objs))
-    
-        all_matched_group_names = expanded_src_entities.union(expanded_dst_entities).intersection(address_groups.keys())
-        for g_name in all_matched_group_names:
-            g_info = address_groups.get(g_name)
-            if g_info and not any(g["name"] == g_name for g in output["matched_groups"]):
-                output["matched_groups"].append({
-                    "name": g_name,
-                    "category": g_info["row"]["category"],
-                    "device": g_info["row"]["device_name"],
-                    "data": g_info["data"]
-                })
-    
-        for row, r_data in security_rules:
-            r_name = row["name"] or r_data.get("@name") or r_data.get("name", "Unknown")
-    
-            def extract_members(field_key):
-                field = r_data.get(field_key, {})
-                if isinstance(field, dict):
-                    m = field.get("member", [])
-                elif isinstance(field, list):
-                    m = field
+                    m = val.get("member", [])
+                elif isinstance(val, list):
+                    m = val
                 else:
-                    m = [field] if field else []
+                    m = [val] if val else []
                 if isinstance(m, str):
                     m = [m]
                 return [str(x) for x in m if x]
-    
-            rule_sources = extract_members("source")
-            rule_dests = extract_members("destination")
-            rule_services = extract_members("service")
-    
-            src_match = True
+
+            src_members = extract_members("source")
+            dst_members = extract_members("destination")
+            srv_members = extract_members("service")
+
+            src_ok = True
             if source:
-                src_match = False
-                for rs in rule_sources:
-                    if rs in expanded_src_entities or source.lower() in rs.lower():
-                        src_match = True
+                src_ok = False
+                for sm in src_members:
+                    if sm.lower() in matched_src_entities or matches_ip_or_query({"name": sm, "raw_str": sm.lower(), "all_values": [sm]}, source, src_net):
+                        src_ok = True
                         break
-                    rs_net = extract_ip_or_cidr(rs)
-                    if src_net and src_net.overlaps(src_net):
-                        src_match = True
+                if not src_ok and source.lower() in rule["raw_str"]:
+                    src_ok = True
+
+            dst_ok = True
+            if destination and src_ok:
+                dst_ok = False
+                for dm in dst_members:
+                    if dm.lower() in matched_dst_entities or matches_ip_or_query({"name": dm, "raw_str": dm.lower(), "all_values": [dm]}, destination, dst_net):
+                        dst_ok = True
                         break
-    
-            dst_match = True
-            if destination and src_match:
-                dst_match = False
-                for rd in rule_dests:
-                    if rd in expanded_dst_entities or destination.lower() in rd.lower():
-                        dst_match = True
+                if not dst_ok and destination.lower() in rule["raw_str"]:
+                    dst_ok = True
+
+            port_ok = True
+            if port and src_ok and dst_ok:
+                port_ok = False
+                p_lower = port.lower()
+                for srv in srv_members:
+                    if p_lower in srv.lower() or srv.lower() == "any" or srv.lower() == "application-default":
+                        port_ok = True
                         break
-                    rd_net = extract_ip_or_cidr(rd)
-                    if dst_net and rd_net and dst_net.overlaps(rd_net):
-                        dst_match = True
-                        break
-    
-            port_match = True
-            if port and src_match and dst_match:
-                port_match = False
-                for srv in rule_services:
-                    if port.lower() in srv.lower():
-                        port_match = True
-                        break
-    
-            if src_match and dst_match and port_match and (source or destination or port):
+                if not port_ok and p_lower in rule["raw_str"]:
+                    port_ok = True
+
+            if src_ok and dst_ok and port_ok and (source or destination or port):
                 output["matched_rules"].append({
-                    "device": row["device_name"],
-                    "rule_name": r_name,
-                    "category": row["category"],
-                    "sources": rule_sources,
-                    "destinations": rule_dests,
-                    "services": rule_services,
+                    "device": rule["device"],
+                    "rule_name": rule["name"],
+                    "category": rule["category"],
+                    "sources": src_members,
+                    "destinations": dst_members,
+                    "services": srv_members,
                     "data": r_data
                 })
-    
+
         return output
 
 
