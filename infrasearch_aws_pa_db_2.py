@@ -548,28 +548,32 @@ class InfrastructureDataSource:
                 output["matched_rules"].append(rec)
             else:
                 output["matched_objects"].append(rec)
-
+              
         if related_cidrs_to_match:
+            def get_panos_targets(obj: Any) -> list[str]:
+                targets = []
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        if k in ("ip-netmask", "ip_netmask", "ip-range", "ip_range", "fqdn", "value", "member", "address", "source", "destination"):
+                            if isinstance(v, str):
+                                targets.append(v)
+                            elif isinstance(v, list):
+                                targets.extend([str(x) for x in v if isinstance(x, (str, int))])
+                            elif isinstance(v, dict):
+                                targets.extend(get_panos_targets(v))
+                        elif isinstance(v, (dict, list)):
+                            targets.extend(get_panos_targets(v))
+                elif isinstance(obj, list):
+                    for item in obj:
+                        targets.extend(get_panos_targets(item))
+                return targets
+
             for row in all_panos_records:
                 item_data = json.loads(row["data"])
                 is_match = False
-                eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
-
-                # Quick target extraction instead of heavy full-tree recursion
-                targets = []
-                if isinstance(eval_obj, dict):
-                    for k in ("ip-netmask", "ip_netmask", "ip-range", "ip_range", "fqdn", "value", "address", "destination", "source"):
-                        v = eval_obj.get(k)
-                        if isinstance(v, str):
-                            targets.append(v)
-                        elif isinstance(v, list):
-                            targets.extend([str(x) for x in v if isinstance(x, str)])
-                        elif isinstance(v, dict):
-                            mem = v.get("member")
-                            if isinstance(mem, str):
-                                targets.append(mem)
-                            elif isinstance(mem, list):
-                                targets.extend([str(x) for x in mem if isinstance(x, str)])
+                
+                # Recursively pull targets from any nesting level using known PAN-OS config keys
+                targets = get_panos_targets(item_data)
 
                 for cidr in related_cidrs_to_match:
                     cidr_net = extract_ip_or_cidr(cidr)
@@ -588,6 +592,7 @@ class InfrastructureDataSource:
 
                 if is_match:
                     matched_panos_ids.add(row["id"])
+                    eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
                     obj_name = row["name"] or item_data.get("name") or (eval_obj.get("@name") if isinstance(eval_obj, dict) else "")
                     if obj_name:
                         matched_object_names.add(str(obj_name))
