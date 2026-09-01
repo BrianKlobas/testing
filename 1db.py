@@ -105,10 +105,38 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
             conn = get_db(self.db_file)
             cursor = conn.cursor()
             results = []
+            seen_ids = set()
             
-            # Check if the query is an IP address or CIDR block
+            search_term = f"%{query.strip()}%"
+            
+            # 1. Try standard text/IP substring match first to guarantee results show up
+            cursor.execute(
+                """
+                SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
+                FROM records r
+                JOIN devices d ON r.device_id = d.id
+                WHERE r.name LIKE ? OR r.data LIKE ?
+                LIMIT ?
+                """,
+                (search_term, search_term, limit)
+            )
+            
+            for row in cursor.fetchall():
+                if row["id"] not in seen_ids:
+                    seen_ids.add(row["id"])
+                    results.append({
+                        "id": row["id"],
+                        "platform": row["platform"],
+                        "category": row["category"],
+                        "filename": row["filename"],
+                        "name": row["name"],
+                        "device": row["device_name"],
+                        "data": json.loads(row["data"]) if row["data"] else {}
+                    })
+
+            # 2. If it's a valid IP/CIDR, also pull via IP_CONTAINS to catch overlapping ranges
             ip_net = extract_ip_or_cidr(query)
-            if ip_net:
+            if ip_net and len(results) < limit:
                 cursor.execute(
                     """
                     SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
@@ -117,33 +145,21 @@ def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
                     WHERE IP_CONTAINS(?, r.data) = 1
                     LIMIT ?
                     """,
-                    (query, limit)
+                    (query.strip(), limit)
                 )
-            else:
-                # Use a reliable wildcard LIKE search across names and raw JSON data
-                search_term = f"%{query}%"
-                cursor.execute(
-                    """
-                    SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
-                    FROM records r
-                    JOIN devices d ON r.device_id = d.id
-                    WHERE r.name LIKE ? OR r.data LIKE ?
-                    LIMIT ?
-                    """,
-                    (search_term, search_term, limit)
-                )
+                for row in cursor.fetchall():
+                    if row["id"] not in seen_ids:
+                        seen_ids.add(row["id"])
+                        results.append({
+                            "id": row["id"],
+                            "platform": row["platform"],
+                            "category": row["category"],
+                            "filename": row["filename"],
+                            "name": row["name"],
+                            "device": row["device_name"],
+                            "data": json.loads(row["data"]) if row["data"] else {}
+                        })
 
-            rows = cursor.fetchall()
-            for row in rows:
-                results.append({
-                    "id": row["id"],
-                    "platform": row["platform"],
-                    "category": row["category"],
-                    "filename": row["filename"],
-                    "name": row["name"],
-                    "device": row["device_name"],
-                    "data": json.loads(row["data"]) if row["data"] else {}
-                })
             conn.close()
             return {"query": query, "count": len(results), "results": results}
             
