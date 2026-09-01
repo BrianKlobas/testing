@@ -344,6 +344,5 @@ def main() -> None:
     print(f"Database          : {db.resolve()}")
     print("-" * 72)
 
-
 if __name__ == "__main__":
     main()
