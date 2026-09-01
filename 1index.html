@@ -88,64 +88,71 @@ async function executePolicyLookup() {
         const res = await fetch("/api/policy-lookup?" + params.toString());
         const data = await res.json();
 
-        let html = `<div class="section"><div class="section-title"><h2>Policy Lookup Results</h2><span class="count">Query: ${esc(data.query || 'N/A')}</span></div>`;
+        let html = `<div class="section"><div class="section-title"><h2>Policy Lookup Dynamic Viewer</h2><span class="count">Data Inspector</span></div>`;
         html += `<div style="padding: 16px;">`;
 
-        // Helper to render sections like matched_rules, matched_objects, matched_groups, rules
-        function renderSectionGroup(title, items) {
-            if (!items || !Array.isArray(items) || items.length === 0) return '';
+        // Loop through EVERY key present in the JSON response dynamically
+        let totalItemsRendered = 0;
+        
+        for (const [key, value] of Object.entries(data)) {
+            if (key === 'query') continue; // Skip query metadata string
             
-            let secHtml = `<h3 style="font-size: 14px; color: var(--gold); margin: 16px 0 8px 0; border-bottom: 1px solid #333; padding-bottom: 4px;">${esc(title)} (${items.length})</h3>`;
-            
-            items.forEach((item, idx) => {
-                // Support objects where data might be nested or direct
-                const itemData = item.data || item.entry || item;
-                const itemName = item.name || itemData.name || itemData['@name'] || `Item #${idx + 1}`;
-                const action = itemData.action || item.action || 'info';
-                const actionColor = ['deny', 'drop', 'block'].includes(String(action).toLowerCase()) ? '#f87171' : '#34d399';
+            // Normalize value into an array whether it's an array or an object
+            let items = [];
+            if (Array.isArray(value)) {
+                items = value;
+            } else if (value && typeof value === 'object') {
+                items = [value];
+            }
+
+            if (items.length > 0) {
+                html += `<h3 style="font-size: 14px; color: var(--gold); margin: 16px 0 8px 0; border-bottom: 1px solid #333; padding-bottom: 4px; text-transform: uppercase;">📂 ${esc(key)} (${items.length})</h3>`;
                 
-                secHtml += `
-                    <div style="background: #1e1f24; border: 1px solid #333; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; border-bottom: 1px solid #2f3036; padding-bottom: 6px;">
-                            <b style="font-size: 14px; color: #fff;">${esc(itemName)}</b>
-                            <span style="font-size: 10px; background: ${actionColor}22; color: ${actionColor}; border: 1px solid ${actionColor}55; padding: 2px 6px; border-radius: 4px; text-transform: uppercase;">${esc(action)}</span>
+                items.forEach((item, idx) => {
+                    totalItemsRendered++;
+                    
+                    // If the item is a raw primitive value (string/number), just display it
+                    if (item === null || typeof item !== 'object') {
+                        html += `<div style="background: #1e1f24; border: 1px solid #333; border-radius: 6px; padding: 10px; margin-bottom: 8px; font-family: monospace; font-size: 13px;">${esc(item)}</div>`;
+                        return;
+                    }
+
+                    // Pull out any fields or names dynamically
+                    const name = item.name || item.rule_name || item.title || item.Id || `Record #${idx + 1}`;
+                    
+                    // Build a dynamic key-value table for whatever properties exist inside this item
+                    let propTable = `<table class="prop-table" style="margin-top: 6px;">`;
+                    for (const [subKey, subVal] of Object.entries(item)) {
+                        if (subVal !== null && subVal !== undefined && subVal !== '') {
+                            let displayVal = subVal;
+                            if (typeof subVal === 'object') {
+                                displayVal = JSON.stringify(subVal, null, 2);
+                            }
+                            propTable += `<tr><th>${esc(subKey)}</th><td>${esc(displayVal)}</td></tr>`;
+                        }
+                    }
+                    propTable += `</table>`;
+
+                    html += `
+                        <div style="background: #1e1f24; border: 1px solid #333; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+                            <b style="font-size: 14px; color: #fff;">${esc(name)}</b>
+                            ${propTable}
                         </div>
-                        <div style="font-size: 12.5px; color: #cbd5e1; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px;">
-                            <div><b>Source:</b> ${esc(formatField(itemData.source || itemData.src || itemData.from))}</div>
-                            <div><b>Destination:</b> ${esc(formatField(itemData.destination || itemData.dst || itemData.to))}</div>
-                            <div><b>Service:</b> ${esc(formatField(itemData.service || itemData.port || itemData.services))}</div>
-                        </div>
-                    </div>
-                `;
-            });
-            return secHtml;
+                    `;
+                });
+            }
         }
 
-        let totalMatchedCount = 0;
-        const sectionsToProcess = [
-            { key: 'rules', label: 'Matching Rules' },
-            { key: 'matched_rules', label: 'Matched Security & NAT Rules' },
-            { key: 'matched_objects', label: 'Matched Objects' },
-            { key: 'matched_groups', label: 'Matched Groups' }
-        ];
-
-        sectionsToProcess.forEach(sec => {
-            if (data[sec.key] && Array.isArray(data[sec.key])) {
-                totalMatchedCount += data[sec.key].length;
-                html += renderSectionGroup(sec.label, data[sec.key]);
-            }
-        });
-
-        if (totalMatchedCount === 0) {
-            html += `<div class="empty">No matching records found across rules, groups, or objects.</div>`;
+        if (totalItemsRendered === 0) {
+            html += `<div class="empty">The JSON object contained keys, but no parseable records were found inside them.</div>`;
         }
 
         html += `</div>`;
 
-        // Always show full raw JSON payload at the bottom
+        // Always display the raw JSON payload at the bottom
         html += `
             <div style="padding: 16px; border-top: 1px solid #2f3036; background: #18191d;">
-                <details>
+                <details open>
                     <summary style="cursor: pointer; color: #94a3b8; font-size: 13px; font-weight: bold;">🔍 View Full Raw JSON Payload</summary>
                     <pre style="margin-top: 10px; padding: 12px; background: #111; color: #34d399; border-radius: 4px; overflow-x: auto; font-size: 12px;">${jsonStr(data)}</pre>
                 </details>
@@ -158,11 +165,4 @@ async function executePolicyLookup() {
     } catch (err) {
         document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Error: ${esc(err.message)}</div>`;
     }
-}
-
-function formatField(val) {
-    if (!val) return 'Any';
-    if (Array.isArray(val)) return val.join(', ');
-    if (typeof val === 'object') return JSON.stringify(val);
-    return val;
 }
