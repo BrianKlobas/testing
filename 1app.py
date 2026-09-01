@@ -507,31 +507,31 @@ class InfrastructureDataSource:
                                     expanded = True
                                 _classify_panos_record(row, item_data, output)
                                 break
-            else:
-                clean_q = _clean_fts_query(query)
-                if clean_q:
-                    fts_query = clean_q
-                    cursor.execute(
-                        """
-                        SELECT r.id, d.name AS device, r.platform, r.category,
-                               r.filename, r.name, r.data
-                        FROM records r
-                        JOIN devices d ON r.device_id = d.id
-                        JOIN records_fts fts ON fts.rowid = r.id
-                        WHERE r.platform = 'panos' AND records_fts MATCH ?
-                        LIMIT ?
-                        """,
-                        (fts_query, limit),
-                    )
-                    for row in cursor.fetchall():
-                        if row["id"] in matched_panos_ids:
-                            continue
-                        try:
-                            item_data = json.loads(row["data"])
-                        except json.JSONDecodeError:
-                            continue
-                        matched_panos_ids.add(row["id"])
-                        _classify_panos_record(row, item_data, output)
+            
+            # Independent text search handler (un-indented so it always runs for text queries)
+            clean_q = _clean_fts_query(query)
+            if clean_q and not query_network:
+                cursor.execute(
+                    """
+                    SELECT r.id, d.name AS device, r.platform, r.category,
+                           r.filename, r.name, r.data
+                    FROM records r
+                    JOIN devices d ON r.device_id = d.id
+                    JOIN records_fts fts ON fts.rowid = r.id
+                    WHERE r.platform = 'panos' AND records_fts MATCH ?
+                    LIMIT ?
+                    """,
+                    (clean_q, limit),
+                )
+                for row in cursor.fetchall():
+                    if row["id"] in matched_panos_ids:
+                        continue
+                    try:
+                        item_data = json.loads(row["data"])
+                    except json.JSONDecodeError:
+                        continue
+                    matched_panos_ids.add(row["id"])
+                    _classify_panos_record(row, item_data, output)
 
             output["summary"] = {
                 "aws_resources": len(output["aws_matches"]),
