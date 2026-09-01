@@ -193,7 +193,7 @@ class InfrastructureDataSource:
         finally:
             conn.close()
 
-def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
+    def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         query = query.strip()
         query_network = extract_ip_or_cidr(query)
         search_info = classify_ip_search(query) if 'classify_ip_search' in globals() else {"type": "unknown", "family": "unknown"}
