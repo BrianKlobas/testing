@@ -13,3 +13,28 @@ async function investigate() {
         document.getElementById("output").innerHTML = `<div class="empty" style="color:#f87171;">Error executing search query.</div>`;
     }
 }
+
+
+
+function render(data) {
+    // Fall back to empty summary if your backend doesn't return s
+    if (data.summary) {
+        setSummary(data.summary);
+    }
+    
+    let html = "";
+    
+    // Map these keys to match whatever your backend python dictionary actually uses:
+    const awsMatches = data.aws_matches || data.aws || [];
+    const secGroups = data.attached_security_groups || data.security_groups || [];
+    const matchedObjs = data.matched_objects || data.objects || [];
+    const matchedRls = data.matched_rules || data.rules || [];
+
+    if (awsMatches.length) html += section("Matching AWS Resources", awsMatches.length, awsMatches.map(x => itemHTML(x, "aws")).join(""));
+    if (secGroups.length) html += section("Attached Security Groups", secGroups.length, secGroups.map(x => itemHTML(x, "sg")).join(""));
+    if (matchedObjs.length) html += section("Palo Alto Objects & Groups", matchedObjs.length, matchedObjs.map(x => itemHTML(x, "palo")).join(""));
+    if (matchedRls.length) html += section("Palo Alto Security Rules & NATs", matchedRls.length, matchedRls.map(x => itemHTML(x, "palo")).join(""));
+
+    if (!html) html = `<div class="empty">No matching records found.</div>`;
+    document.getElementById("output").innerHTML = html;
+}
