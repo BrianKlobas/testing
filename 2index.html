@@ -1,0 +1,1316 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PerDef Security Orchestrator — Dashboard</title>
+<style>
+:root {
+    --dark-gray: #3b3c43;
+    --gold: #fbc600;
+    --medium-gray: #94969a;
+    --light-gray: #e0eae8;
+    
+    --bg-main: #2b2c32;
+    --bg-surface: var(--dark-gray);
+    --bg-card: #45464f;
+    --border-color: var(--gold);
+    --text-primary: var(--light-gray);
+    --text-secondary: var(--medium-gray);
+    --accent: var(--gold);
+    --accent-hover: #d4a700;
+    --palo-orange: var(--gold);
+    --code-bg: #2d2e34;
+    --sidebar-width: 260px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg-main);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    min-height: 100vh;
+}
+
+.sidebar {
+    width: var(--sidebar-width);
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    z-index: 100;
+}
+
+.brand {
+    padding: 20px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+}
+.logo {
+    width: 36px; height: 36px; border-radius: 8px; background: var(--gold);
+    display: grid; place-items: center; font-weight: bold; font-size: 18px; color: var(--dark-gray);
+}
+.brand h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.5px; color: var(--light-gray); }
+.brand small { color: var(--medium-gray); font-size: 11px; }
+
+.nav-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 16px 12px;
+    flex: 1;
+}
+
+.tab-btn {
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
+    padding: 12px 14px;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 8px;
+    text-align: left;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tab-btn:hover { color: var(--text-primary); background: rgba(251, 198, 0, 0.1); }
+.tab-btn.active { color: var(--dark-gray); background: var(--gold); }
+
+.sidebar-footer {
+    padding: 16px;
+    border-top: 1px solid var(--border-color);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.main-wrapper {
+    margin-left: var(--sidebar-width);
+    flex: 1;
+    padding: 28px;
+    max-width: 1400px;
+}
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.beta-banner {
+    background: rgba(251, 198, 0, 0.15);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.search-panel {
+    background: var(--bg-surface);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    border: 1px solid var(--border-color);
+}
+
+.search-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.search-row input { flex: 1; min-width: 320px; }
+
+input, button {
+    height: 44px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0 14px;
+    font-size: 14px;
+    outline: none;
+    background: var(--bg-main);
+    color: var(--text-primary);
+}
+input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(251, 198, 0, 0.25); }
+button { background: var(--gold); color: var(--dark-gray); border: 0; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+button:hover { background: var(--accent-hover); }
+button.secondary { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); }
+
+.hint { color: var(--text-secondary); font-size: 13px; margin-top: 10px; }
+
+.summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin: 18px 0;
+}
+
+.card {
+    background: var(--bg-surface);
+    padding: 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+}
+.card b { display: block; font-size: 24px; color: var(--gold); font-weight: 700; }
+.card.palo-card b { color: var(--gold); }
+.card span { color: var(--text-secondary); font-size: 11px; margin-top: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.status-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 18px;
+}
+
+.status-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.status-title { font-weight: 700; font-size: 15px; }
+.status-pill {
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+.status-pill.success { background: rgba(251, 198, 0, 0.2); color: var(--gold); border: 1px solid var(--gold); }
+
+.section {
+    background: var(--bg-surface);
+    border-radius: 10px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+
+.section-title {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #2f3036;
+}
+.section-title h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--text-primary); }
+.count { background: var(--bg-card); border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; color: var(--gold); border: 1px solid var(--border-color); }
+
+.item { border-bottom: 1px solid var(--border-color); padding: 18px; }
+.item:last-child { border-bottom: 0; }
+
+.item-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.item-name { font-weight: 700; font-size: 15px; color: var(--light-gray); }
+
+.badge {
+    display: inline-block;
+    background: var(--bg-card);
+    color: var(--light-gray);
+    border-radius: 6px;
+    padding: 3px 8px;
+    margin-left: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid var(--medium-gray);
+}
+.badge.blue { background: #2f3036; color: var(--gold); border: 1px solid var(--gold); }
+.badge.aws { background: #4a3e1c; color: var(--gold); border: 1px solid var(--gold); }
+.badge.sg { background: #3b3a43; color: var(--light-gray); border: 1px solid var(--medium-gray); }
+.badge.palo { background: rgba(251, 198, 0, 0.15); color: var(--gold); border: 1px solid var(--gold); }
+
+.meta { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
+pre { background: var(--code-bg); color: var(--light-gray); border-radius: 8px; padding: 14px; overflow: auto; max-height: 350px; font-size: 12px; font-family: monospace; border: 1px solid var(--border-color); }
+details { margin-top: 10px; }
+summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600; }
+
+.prop-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: var(--bg-card); border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color); }
+.prop-table th { background: #2f3036; color: var(--gold); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border-color); width: 25%; }
+.prop-table td { padding: 8px 12px; border-bottom: 1px solid #4f5058; color: var(--text-primary); font-family: monospace; word-break: break-all; }
+.prop-table tr:last-child td { border-bottom: none; }
+
+.rule-tag { display: inline-block; background: var(--bg-main); padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid var(--medium-gray); color: var(--text-secondary); }
+.rule-tag.allow { background: rgba(251, 198, 0, 0.2); color: var(--gold); border-color: var(--gold); font-weight: bold; }
+.rule-tag.deny { background: #5a2d2d; color: #fecaca; border-color: #991b1b; font-weight: bold; }
+.rule-tag.highlight { background: var(--bg-card); color: var(--gold); border-color: var(--gold); }
+
+/* 2-Column Info Page Layout */
+.info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 14px;
+}
+@media (max-width: 900px) {
+    .info-grid { grid-template-columns: 1fr; }
+}
+
+.link-column-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 14px;
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 8px;
+}
+
+.link-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 14px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+.link-card h4 { margin: 0 0 6px 0; color: var(--text-primary); font-size: 14px; }
+.link-card p { margin: 0 0 10px 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.4; }
+.link-card a {
+    color: var(--gold);
+    text-decoration: none;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+.link-card a:hover { text-decoration: underline; }
+
+.sub-links {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-color);
+}
+
+.org-tree { font-family: monospace; font-size: 13px; line-height: 1.6; }
+.tree-node { margin: 8px 0; }
+.tree-folder { font-weight: bold; color: var(--text-primary); padding: 6px 0; display: inline-block; }
+.tree-leaf {
+    background: var(--bg-card);
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin: 6px 0;
+    border: 1px solid var(--border-color);
+}
+.switch-link { color: var(--gold); text-decoration: none; font-weight: 600; }
+.switch-link:hover { text-decoration: underline; color: #ffe680; }
+
+.empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 14px; }
+
+.about-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 10px;
+}
+.about-card h3 { margin: 0 0 8px 0; color: var(--gold); font-size: 16px; }
+.about-card p { margin: 4px 0; font-size: 13px; color: var(--text-primary); }
+</style>
+</head>
+
+<body>
+
+<div class="sidebar">
+    <div class="brand">
+        <div class="logo">🔒</div>
+        <div>
+            <h1>PerDef Security Orchestrator</h1>
+            <small>Unified Security Dashboard</small>
+        </div>
+    </div>
+    
+    <div class="nav-menu">
+        <button class="tab-btn active" onclick="switchTab('search', this)">🔍 Search & Investigate</button>
+        <button class="tab-btn" onclick="switchTab('policyLookup', this)">🛡️ Firewall Policy Lookup</button>
+        <button class="tab-btn" onclick="switchTab('org', this)">🏢 AWS Org Topology</button>
+        <button class="tab-btn" onclick="switchTab('pan', this)">🔥 PAN Panorama Topology</button>
+        <button class="tab-btn" onclick="switchTab('automation', this)">⚙️ Automation Results</button>
+        <button class="tab-btn" onclick="switchTab('info', this)">ℹ️ Information & Links</button>
+        <button class="tab-btn" onclick="switchTab('stats', this)">📊 Collection Analytics</button>
+        
+        <button class="tab-btn" onclick="switchTab('about', this)" style="margin-top: auto;">ℹ️ About / Site Info</button>
+    </div>
+
+    <div class="sidebar-footer">
+        <div id="dataInfo">Loading database status...</div>
+    </div>
+</div>
+
+<div class="main-wrapper">
+
+    <div id="tab-search" class="tab-content active">
+        <div class="beta-banner">
+            ⚠️ <b>Early Beta Warning:</b> This search tool is currently in early preview. Always manually double-check and verify findings against your source system before performing administrative changes.
+        </div>
+
+        <div class="search-panel">
+            <div class="search-row">
+                <input id="query" placeholder="Search IP, CIDR, Instance ID (i-xxxx), ENI ID, Route53 Domain/Record, Palo Rule..." autocomplete="off">
+                <button onclick="investigate()">Investigate</button>
+                <button class="secondary" onclick="clearAll()">Clear</button>
+            </div>
+            <div class="hint">
+                💡 High-noise 'all_entries' objects are cleanly tucked away in an expandable tray at the bottom.
+            </div>
+        </div>
+
+        <div id="summary"></div>
+        <div id="output">
+            <div class="empty">Enter a query above to start exploring your infrastructure.</div>
+        </div>
+    </div>
+
+    <div id="tab-policyLookup" class="tab-content">
+        <div class="beta-banner">
+            🛡️ <b>Firewall Policy Intersection Lookup:</b> Enter a source, destination, and optional port/service to find existing firewall rules where both entities match together.
+        </div>
+
+        <div class="search-panel">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; flex-wrap: wrap;">
+                <input id="lookupSource" placeholder="Source IP, Subnet, or Object..." autocomplete="off">
+                <input id="lookupDest" placeholder="Destination IP, Subnet, or Object..." autocomplete="off">
+                <input id="lookupPort" placeholder="Port / Service (Optional)..." autocomplete="off">
+                <button onclick="executePolicyLookup()">Check Rules</button>
+            </div>
+            <div class="hint">
+                💡 Useful for firewall change requests to quickly verify if an access path is already permitted by existing rules.
+            </div>
+        </div>
+
+        <div id="policyLookupOutput" style="margin-top: 20px;">
+            <div class="empty">Enter source, destination, and optional port above to query rules.</div>
+        </div>
+    </div>
+
+    <div id="tab-org" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>AWS Organization Hierarchy</h2>
+                <span id="orgMeta" class="count">Ready</span>
+            </div>
+            <!-- Added clean top link bar -->
+            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border-color); background: #2f3036; display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 13px; color: var(--text-secondary);">Quick Access:</span>
+                <a href="https://aws.amazon.com/console/" target="_blank" class="switch-link" style="font-size: 13px;">🔗 Open Main AWS Console Login &rarr;</a>
+            </div>
+            <div style="padding: 16px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-surface); display: flex; align-items: center; gap: 12px;">
+                <label for="crossRoleInput" style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Cross-Account Role Name:</label>
+                <input id="crossRoleInput" type="text" placeholder="e.g. OrganizationAccountAccessRole or SecurityAdmin" style="height: 36px; width: 320px;" oninput="renderOrgTreeWithRole()">
+                <small style="color: var(--text-secondary);">Populating this makes AWS account IDs clickable direct Switch-Role links.</small>
+            </div>
+            <div style="padding: 20px;" id="orgTreeView" class="org-tree">
+                <div class="empty">Loading organization topology...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-pan" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>Panorama Templates & Device Groups Hierarchy</h2>
+                <span id="panMeta" class="count">Ready</span>
+            </div>
+            <!-- Added clean top link bar -->
+            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border-color); background: #2f3036; display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 13px; color: var(--text-secondary);">Quick Access:</span>
+                <a href="#" onclick="alert('Configure Panorama URL in script or replace this href with your direct Panorama URL.'); return false;" class="switch-link" style="font-size: 13px;">🔗 Open Panorama Login &rarr;</a>
+            </div>
+            <div style="padding: 20px;" id="panTreeView" class="org-tree">
+                <div class="empty">Loading panorama topology...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-automation" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>Automation Job & Collection Results</h2>
+                <span class="count">Live Status</span>
+            </div>
+            <div style="padding: 20px;">
+                <h3 style="margin-top: 0; font-size: 15px;">AWS Automated Collections</h3>
+                <div class="status-grid">
+                    <div class="status-card">
+                        <div class="status-card-header">
+                            <span class="status-title">AWS Org Collection</span>
+                            <span class="status-pill success">Successful</span>
+                        </div>
+                        <div class="meta"><b>Source File:</b> org_topology.json</div>
+                        <div class="meta" id="awsOrgDate"><b>File Date:</b> Loading...</div>
+                    </div>
+
+                    <div class="status-card">
+                        <div class="status-card-header">
+                            <span class="status-title">AWS Resource Data Collection</span>
+                            <span class="status-pill success">Successful</span>
+                        </div>
+                        <div class="meta"><b>Source Directory:</b> ./aws_parsed</div>
+                        <div class="meta" id="awsDataDate"><b>File Date:</b> Loading...</div>
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 24px; font-size: 15px;">Palo Alto Automated Collections</h3>
+                <div class="status-grid">
+                    <div class="status-card">
+                        <div class="status-card-header">
+                            <span class="status-title">Panorama Topology Collection</span>
+                            <span class="status-pill success">Successful</span>
+                        </div>
+                        <div class="meta"><b>Source File:</b> panorama_topology.json</div>
+                        <div class="meta" id="panOrgDate"><b>File Date:</b> Loading...</div>
+                    </div>
+
+                    <div class="status-card">
+                        <div class="status-card-header">
+                            <span class="status-title">Palo Alto Data Collection</span>
+                            <span class="status-pill success">Successful</span>
+                        </div>
+                        <div class="meta"><b>Source Directory:</b> ./parsed</div>
+                        <div class="meta" id="panDataDate"><b>File Date:</b> Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-info" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>Useful Links & Infrastructure Portals</h2>
+            </div>
+            <div style="padding: 20px;">
+                <div class="info-grid">
+                    <!-- Column 1: Systems & Tools -->
+                    <div>
+                        <div class="link-column-title">🛠️ System & Tool Portals</div>
+
+                        <div class="link-card">
+                            <h4>Splunk Enterprise Log Management</h4>
+                            <p>Centralized SIEM log search, firewall traffic analysis, and SOC alerts.</p>
+                            <a href="#" onclick="alert('Configure internal Splunk URL in script.'); return false;">Open Splunk &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AWS Management Console</h4>
+                            <p>Direct SSO portal access for cloud tenant administration and EC2 management.</p>
+                            <a href="https://aws.amazon.com/console/" target="_blank">Open AWS Console &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Palo Alto Panorama Portal</h4>
+                            <p>Centralized firewall policy manager, security profile configuration, and rule inspection.</p>
+                            <a href="#" onclick="alert('Configure Panorama URL in script.'); return false;">Open Panorama &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Microsoft Azure Portal</h4>
+                            <p>Cloud tenant administration, VNets, and Enterprise application management.</p>
+                            <a href="https://portal.azure.com" target="_blank">Open Azure Portal &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Infoblox IPAM & Grid Manager</h4>
+                            <p>Enterprise IP Address Management, DNS zone administrative panel, and DHCP scopes.</p>
+                            <a href="#" onclick="alert('Configure Infoblox URL in script.'); return false;">Open Infoblox &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Wiz Cloud Security Platform</h4>
+                            <p>Cloud Security Posture Management (CSPM), vulnerability management, and risk graphs.</p>
+                            <a href="#" onclick="alert('Configure Wiz URL in script.'); return false;">Open Wiz &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AlgoSec Firewall Analyzer</h4>
+                            <p>Automated security policy analysis, change management, and firewall rule cleanup.</p>
+                            <a href="#" onclick="alert('Configure AlgoSec URL in script.'); return false;">Open AlgoSec &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Akamai Control Center</h4>
+                            <p>Edge Security, Web Application Firewall (WAF) rule tuning, and CDN management.</p>
+                            <a href="https://control.akamai.com" target="_blank">Open Akamai Portal &rarr;</a>
+                        </div>
+                    </div>
+
+                    <!-- Column 2: General & Information -->
+                    <div>
+                        <div class="link-column-title">📚 General & Information Links</div>
+
+                        <div class="link-card">
+                            <h4>ServiceNow Portal</h4>
+                            <p>Enterprise IT Service Management for submitting security requests and incidents.</p>
+                            <div class="sub-links">
+                                <a href="#" onclick="alert('Configure FW Request URL'); return false;">🔥 Firewall Request</a>
+                                <a href="#" onclick="alert('Configure Proxy Request URL'); return false;">🌐 Proxy Request</a>
+                                <a href="#" onclick="alert('Configure Security Tab URL'); return false;">🛡️ Security Tab</a>
+                            </div>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Security Standards & Compliance</h4>
+                            <p>Corporate baseline security policies, hardening standards, and governance rules.</p>
+                            <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Security Standards &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Network Documentation</h4>
+                            <p>High-level architectural diagrams, VLAN mapping tables, and routing policies.</p>
+                            <a href="#" onclick="alert('Configure documentation link in script.'); return false;">View Network Docs &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>On-Premise Network Diagrams</h4>
+                            <p>Data center topologies, core distribution layer Visio maps, and edge WAN layouts.</p>
+                            <a href="#" onclick="alert('Configure diagram link in script.'); return false;">View On-Prem Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AWS Architecture Diagrams</h4>
+                            <p>Transit Gateway layouts, VPC peering maps, and cross-account network designs.</p>
+                            <a href="#" onclick="alert('Configure AWS diagram link in script.'); return false;">View AWS Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Azure Architecture Diagrams</h4>
+                            <p>Hub-and-Spoke topology diagrams, Azure ExpressRoute connections, and Virtual WAN maps.</p>
+                            <a href="#" onclick="alert('Configure Azure diagram link in script.'); return false;">View Azure Diagrams &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Run Books & Operational Procedures</h4>
+                            <p>Step-by-step procedures for standard infrastructure operations, failovers, and emergency changes.</p>
+                            <a href="#" onclick="alert('Configure Runbooks link in script.'); return false;">View Run Books &rarr;</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-stats" class="tab-content">
+        <div class="stats-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 16px;">
+            <div class="card">
+                <h3 style="margin-top:0;">☁️ AWS Cloud Inventory</h3>
+                <div id="awsStats"><div class="empty">Loading stats...</div></div>
+            </div>
+            <div class="card">
+                <h3 style="margin-top:0; color:var(--palo-orange);">🛡️ PAN-OS Firewall Inventory</h3>
+                <div id="panosStats"><div class="empty">Loading stats...</div></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-about" class="tab-content">
+        <div class="section">
+            <div class="section-title">
+                <h2>About / Site Information</h2>
+            </div>
+            <div style="padding: 20px;">
+                <div class="beta-banner">
+                    ⚠️ <b>Early Beta Warning:</b> This search tool is currently in early preview. Always manually double-check and verify findings against your source system before performing administrative changes.
+                </div>
+                
+                <div class="about-card">
+                    <h3>PerDef Security Orchestrator</h3>
+                    <p><b>Version:</b> v.01 (beta)</p>
+                    <p><b>Owner:</b> PerDef Team</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+let currentOrgData = null;
+let currentSearchQuery = "";
+
+function switchTab(tabId, btn) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+    document.getElementById('tab-' + tabId).classList.add('active');
+    btn.classList.add('active');
+
+    if (tabId === 'org') loadOrgTopology();
+    if (tabId === 'pan') loadPanTopology();
+    if (tabId === 'automation') loadAutomationResults();
+    if (tabId === 'stats') loadStats();
+}
+
+function esc(value) {
+    return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+function jsonStr(value) { return esc(JSON.stringify(value, null, 2)); }
+
+function setSummary(s) {
+    document.getElementById("summary").innerHTML = `
+        <div class="summary">
+            <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
+            <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
+            <div class="card palo-card"><b>${s.palo_objects || 0}</b><span>Palo Alto Objects</span></div>
+            <div class="card palo-card"><b>${s.palo_groups || 0}</b><span>Palo Alto Groups</span></div>
+            <div class="card palo-card"><b>${s.palo_rules || 0}</b><span>Palo Alto Security & NAT Rules</span></div>
+            <div class="card" style="border-color:var(--border-color);"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
+        </div>
+    `;
+}
+
+function section(title, count, body) {
+    return `<div class="section"><div class="section-title"><h2>${title}</h2><span class="count">${count}</span></div>${body}</div>`;
+}
+
+function extractValues(obj) {
+    if (obj === null || obj === undefined) return [];
+    if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') {
+        return [String(obj)];
+    }
+    if (Array.isArray(obj)) {
+        return obj.flatMap(item => extractValues(item));
+    }
+    if (typeof obj === 'object') {
+        let results = [];
+        if (obj.member !== undefined) results.push(...extractValues(obj.member));
+        if (obj.entry !== undefined) results.push(...extractValues(obj.entry));
+        if (obj['#text'] !== undefined) results.push(String(obj['#text']));
+        if (obj.name !== undefined && typeof obj.name === 'string') results.push(obj.name);
+        if (obj['@name'] !== undefined) results.push(String(obj['@name']));
+        
+        if (results.length > 0) return results;
+
+        for (const [k, v] of Object.entries(obj)) {
+            if (!k.startsWith('@')) {
+                results.push(...extractValues(v));
+            }
+        }
+        return results;
+    }
+    return [];
+}
+
+function renderPillList(val, defaultLabel = 'any') {
+    const items = extractValues(val);
+    if (!items || items.length === 0) {
+        return `<span class="rule-tag">${esc(defaultLabel)}</span>`;
+    }
+    return items.map(i => `<span class="rule-tag highlight">${esc(i)}</span>`).join(' ');
+}
+
+function findKeyRecursively(obj, keys) {
+    if (!obj || typeof obj !== 'object') return undefined;
+    for (const k of keys) {
+        if (obj[k] !== undefined) return obj[k];
+    }
+    for (const key in obj) {
+        if (typeof obj[key] === 'object') {
+            const found = findKeyRecursively(obj[key], keys);
+            if (found !== undefined) return found;
+        }
+    }
+    return undefined;
+}
+
+function renderRoute53Details(data, query) {
+    const raw = data || {};
+    const recordSets = raw.ResourceRecordSets || raw.ResourceRecords || [];
+    const qLower = (query || "").toLowerCase();
+
+    let matchedRecords = [];
+
+    if (Array.isArray(recordSets)) {
+        for (const r of recordSets) {
+            const strRepresentation = JSON.stringify(r).toLowerCase();
+            if (!qLower || strRepresentation.includes(qLower)) {
+                matchedRecords.push(r);
+            }
+        }
+    }
+
+    if (matchedRecords.length === 0 && Array.isArray(recordSets)) {
+        matchedRecords = recordSets.slice(0, 10);
+    }
+
+    let html = `<div style="margin-top: 10px;">`;
+    html += `<b style="font-size:13px; color: var(--accent);">Matched Route53 Resource Record(s):</b>`;
+    html += `<table class="prop-table" style="margin-top:6px;">`;
+    html += `<tr><th>Record Name / FQDN</th><th>Type</th><th>TTL</th><th>Values / Targets</th></tr>`;
+
+    for (const rec of matchedRecords) {
+        const rName = rec.Name || rec.name || "-";
+        const rType = rec.Type || rec.type || "-";
+        const rTTL = rec.TTL ?? rec.ttl ?? "-";
+        
+        let values = [];
+        if (Array.isArray(rec.ResourceRecords)) {
+            values = rec.ResourceRecords.map(v => typeof v === 'object' ? (v.Value || JSON.stringify(v)) : v);
+        } else if (rec.AliasTarget) {
+            values.push("Alias: " + (rec.AliasTarget.DNSName || JSON.stringify(rec.AliasTarget)));
+        } else if (rec.Value) {
+            values.push(rec.Value);
+        }
+
+        const formattedValues = values.length > 0 
+            ? values.map(v => `<span class="rule-tag highlight">${esc(v)}</span>`).join(" ")
+            : `<i style="color:var(--text-secondary)">None</i>`;
+
+        html += `<tr>`;
+        html += `<td><b>${esc(rName)}</b></td>`;
+        html += `<td><span class="badge blue">${esc(rType)}</span></td>`;
+        html += `<td>${esc(rTTL)}</td>`;
+        html += `<td>${formattedValues}</td>`;
+        html += `</tr>`;
+    }
+
+    html += `</table></div>`;
+    return html;
+}
+
+function renderSecurityGroupDetails(data) {
+    const raw = data || {};
+    const ipPermissions = raw.IpPermissions || [];
+    const ipPermissionsEgress = raw.IpPermissionsEgress || [];
+    const sgName = raw.GroupName || raw.GroupId || "Security Group";
+    const description = raw.Description || "No description provided.";
+
+    let html = `<div style="margin-top: 10px;">`;
+    html += `<b style="font-size:13px; color: var(--accent);">Security Group Details:</b>`;
+    html += `<div class="meta" style="margin-bottom: 8px;"><b>Description:</b> ${esc(description)}</div>`;
+
+    // Helper to render rule blocks
+    function renderRulesTable(title, rules, isEgress) {
+        let tHtml = `<div style="margin-top: 8px; font-weight: bold; font-size: 12px; color: var(--text-primary);">${title}</div>`;
+        tHtml += `<table class="prop-table" style="margin-top:4px;">`;
+        tHtml += `<tr><th>Protocol / Ports</th><th>Source / Destination Targets</th></tr>`;
+
+        if (!rules || rules.length === 0) {
+            tHtml += `<tr><td colspan="2"><i style="color:var(--text-secondary)">No rules defined</i></td></tr>`;
+        } else {
+            for (const rule of rules) {
+                let proto = rule.IpProtocol === "-1" ? "All Protocols" : (rule.IpProtocol ? rule.IpProtocol.toUpperCase() : "Any");
+                let fromPort = rule.FromPort;
+                let toPort = rule.ToPort;
+                
+                let portDisplay = proto;
+                if (rule.IpProtocol !== "-1" && fromPort !== undefined && toPort !== undefined) {
+                    if (fromPort === toPort) {
+                        portDisplay = `${proto} : ${fromPort}`;
+                    } else {
+                        portDisplay = `${proto} : ${fromPort} - ${toPort}`;
+                    }
+                }
+
+                let targetEntries = [];
+                const targetKey = isEgress ? (rule.IpRanges || rule.Ipv6Ranges || rule.UserIdGroupPairs || rule.PrefixListIds) : (rule.IpRanges || rule.Ipv6Ranges || rule.UserIdGroupPairs || rule.PrefixListIds);
+                
+                // Collect IP ranges
+                if (Array.isArray(rule.IpRanges)) {
+                    rule.IpRanges.forEach(r => targetEntries.push(r.CidrIp + (r.Description ? ` (${r.Description})` : '')));
+                }
+                if (Array.isArray(rule.Ipv6Ranges)) {
+                    rule.Ipv6Ranges.forEach(r => targetEntries.push(r.CidrIpv6 + (r.Description ? ` (${r.Description})` : '')));
+                }
+                // Collect Security Group references / targets
+                if (Array.isArray(rule.UserIdGroupPairs)) {
+                    rule.UserIdGroupPairs.forEach(g => targetEntries.push((g.GroupId || g.GroupName) + (g.Description ? ` (${g.Description})` : '')));
+                }
+                // Collect Prefix list IDs
+                if (Array.isArray(rule.PrefixListIds)) {
+                    rule.PrefixListIds.forEach(p => targetEntries.push(p.PrefixListId));
+                }
+
+                if (targetEntries.length === 0 && rule.IpProtocol === "-1") {
+                    targetEntries.push("0.0.0.0/0 (Any)");
+                }
+
+                const formattedTargets = targetEntries.length > 0
+                    ? targetEntries.map(v => `<span class="rule-tag highlight">${esc(v)}</span>`).join(" ")
+                    : `<i style="color:var(--text-secondary)">None</i>`;
+
+                tHtml += `<tr>`;
+                tHtml += `<td><span class="badge blue">${esc(portDisplay)}</span></td>`;
+                tHtml += `<td>${formattedTargets}</td>`;
+                tHtml += `</tr>`;
+            }
+        }
+        tHtml += `</table>`;
+        return tHtml;
+    }
+
+    html += renderRulesTable("📥 Inbound Rules (IpPermissions)", ipPermissions, false);
+    html += renderRulesTable("📤 Outbound Rules (IpPermissionsEgress)", ipPermissionsEgress, true);
+    html += `</div>`;
+    return html;
+}
+
+function renderPaloAltoDetails(x) {
+    const raw = x.data || {};
+    const d = raw.entry || raw;
+    const cat = (x.type || "").toLowerCase();
+
+    if (cat.includes("rule") || cat.includes("policy") || cat.includes("nat") || d.action || d.from || d.to) {
+        const action = findKeyRecursively(d, ['action']) || 'allow';
+        const actionBadge = (String(action).toLowerCase() === "allow") 
+            ? `<span class="rule-tag allow">ALLOW</span>` 
+            : `<span class="rule-tag deny">${esc(String(action).toUpperCase())}</span>`;
+
+        const fromVal = findKeyRecursively(d, ['from', 'from-zone']);
+        const toVal = findKeyRecursively(d, ['to', 'to-zone']);
+        const srcVal = findKeyRecursively(d, ['source']);
+        const dstVal = findKeyRecursively(d, ['destination', 'dest']);
+        const appVal = findKeyRecursively(d, ['application', 'app']);
+        const svcVal = findKeyRecursively(d, ['service', 'port']);
+        const urlVal = findKeyRecursively(d, ['url-category', 'category']);
+        const descVal = findKeyRecursively(d, ['description']);
+
+        let html = `<table class="prop-table">`;
+        html += `<tr><th>Rule Action</th><td>${actionBadge}</td></tr>`;
+        html += `<tr><th>From Zone(s)</th><td>${renderPillList(fromVal, 'any')}</td></tr>`;
+        html += `<tr><th>To Zone(s)</th><td>${renderPillList(toVal, 'any')}</td></tr>`;
+        html += `<tr><th>Source Address</th><td>${renderPillList(srcVal, 'any')}</td></tr>`;
+        html += `<tr><th>Destination Address</th><td>${renderPillList(dstVal, 'any')}</td></tr>`;
+        html += `<tr><th>Application</th><td>${renderPillList(appVal, 'any')}</td></tr>`;
+        html += `<tr><th>Service / Port</th><td>${renderPillList(svcVal, 'any')}</td></tr>`;
+        if (urlVal) html += `<tr><th>URL Category</th><td>${renderPillList(urlVal, 'any')}</td></tr>`;
+        if (descVal) html += `<tr><th>Description</th><td>${esc(extractValues(descVal).join(" "))}</td></tr>`;
+        html += `</table>`;
+        return html;
+    }
+
+    const nameVal = x.name || findKeyRecursively(d, ['name', '@name']) || 'Unnamed Object';
+    const descVal = findKeyRecursively(d, ['description']);
+    
+    const ipNetmask = findKeyRecursively(d, ['ip-netmask', 'ip_netmask']);
+    const ipRange = findKeyRecursively(d, ['ip-range', 'ip_range']);
+    const fqdn = findKeyRecursively(d, ['fqdn']);
+    const members = findKeyRecursively(d, ['static', 'members', 'member', 'group']);
+
+    let html = `<table class="prop-table">`;
+    html += `<tr><th>Object Name</th><td><b>${esc(nameVal)}</b></td></tr>`;
+    
+    if (descVal) {
+        html += `<tr><th>Description</th><td>${esc(extractValues(descVal).join(" "))}</td></tr>`;
+    } else {
+        html += `<tr><th>Description</th><td><i style="color:var(--text-secondary)">None</i></td></tr>`;
+    }
+
+    if (members) html += `<tr><th>Group Members</th><td>${renderPillList(members, 'None')}</td></tr>`;
+    if (ipNetmask) html += `<tr><th>IP / Subnet</th><td>${renderPillList(ipNetmask)}</td></tr>`;
+    if (ipRange) html += `<tr><th>IP Range</th><td>${renderPillList(ipRange)}</td></tr>`;
+    if (fqdn) html += `<tr><th>FQDN</th><td>${renderPillList(fqdn)}</td></tr>`;
+
+    if (!members && !ipNetmask && !ipRange && !fqdn) {
+        const genericVals = extractValues(d).filter(v => v !== nameVal);
+        if (genericVals.length > 0) {
+            html += `<tr><th>Value(s)</th><td>${genericVals.map(v => `<span class="rule-tag highlight">${esc(v)}</span>`).join(' ')}</td></tr>`;
+        }
+    }
+    
+    html += `</table>`;
+    return html;
+}
+
+function renderProperties(obj) {
+    if (!obj || typeof obj !== 'object') return '';
+    let html = `<table class="prop-table">`;
+    for (const [k, v] of Object.entries(obj)) {
+        if (v !== null && v !== undefined && v !== "" && typeof v !== 'object') {
+            html += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
+        }
+    }
+    html += `</table>`;
+    return html;
+}
+
+function itemHTML(x, badgeClass) {
+    const rawData = x.data || {};
+    const evalData = rawData.entry || rawData;
+    const displayName = x.name || evalData.name || evalData['@name'] || "Unnamed Record";
+    const categoryLower = (x.type || "").toLowerCase();
+    
+    let extraDetails = "";
+    if (badgeClass === "palo") {
+        extraDetails = renderPaloAltoDetails(x);
+    } else if (categoryLower.includes("security_group") || categoryLower.includes("security-group") || rawData.IpPermissions !== undefined) {
+        extraDetails = renderSecurityGroupDetails(rawData);
+    } else if (categoryLower.includes("route53") || categoryLower.includes("r53") || categoryLower.includes("hostedzone") || rawData.ResourceRecordSets) {
+        extraDetails = renderRoute53Details(rawData, currentSearchQuery);
+    } else {
+        extraDetails = renderProperties(x.data);
+    }
+
+    return `
+        <div class="item">
+            <div class="item-head">
+                <div class="item-name">${esc(displayName)}</div>
+                <div>
+                    <span class="badge blue">${esc(x.device)}</span>
+                    <span class="badge ${badgeClass}">${esc(x.type)}</span>
+                </div>
+            </div>
+            <div class="meta">Source File: ${esc(x.file || '')}</div>
+            ${x.match_reason ? `<div class="meta"><b>Relationship:</b> ${esc(x.match_reason)}${x.matched_value ? ` — ${esc(x.matched_value)}` : ''}</div>` : ''}
+            ${x.attachment_scope ? `<div class="meta"><b>Attachment:</b> ${esc(x.attachment_scope)}</div>` : ''}
+            ${x.match_details ? `<div class="meta"><b>Matched by:</b> Source ${esc((x.match_details.source || []).join(', '))} | Destination ${esc((x.match_details.destination || []).join(', '))}${x.match_details.port_query ? ` | Port ${esc(x.match_details.port_query)}` : ''}</div>` : ''}
+            ${extraDetails}
+            <details style="margin-top: 12px;">
+                <summary>View Full Raw JSON Payload</summary>
+                <pre>${jsonStr(x.data)}</pre>
+            </details>
+        </div>
+    `;
+}
+
+function render(data) {
+    setSummary(data.summary);
+    let html = "";
+    if (data.aws_matches.length) html += section("Matching AWS Resources", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
+    if (data.attached_security_groups.length) html += section("Attached Security Groups", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
+    if (data.network_context && data.network_context.length) {
+        const ctx = data.network_context.map(x => `<span class="rule-tag highlight" title="${esc(x.source || '')}">${esc(x.value)}${x.source ? ` <small>(${esc(x.source)})</small>` : ''}</span>`).join(' ');
+        html += section("Resolved Network Context", data.network_context.length, `<div class="item">${ctx}</div>`);
+    }
+    if (data.matched_objects && data.matched_objects.length) html += section("Palo Alto Address / Related Objects", data.matched_objects.length, data.matched_objects.map(x => itemHTML(x, "palo")).join(""));
+    if (data.matched_groups && data.matched_groups.length) html += section("Palo Alto Object Groups", data.matched_groups.length, data.matched_groups.map(x => itemHTML(x, "palo")).join(""));
+    if (data.matched_rules && data.matched_rules.length) html += section("Palo Alto Security Rules & NATs", data.matched_rules.length, data.matched_rules.map(x => itemHTML(x, "palo")).join(""));
+    
+    if (data.all_entries_matches && data.all_entries_matches.length > 0) {
+        const allEntriesContent = data.all_entries_matches.map(x => itemHTML(x, "palo")).join("");
+        html += `
+            <div class="section" style="border-style: dashed;">
+                <details>
+                    <summary style="padding: 16px; font-size: 14px; background: #2f3036;">
+                        📄 Parsed Full Collections (all_entries.json Files) — <b>${data.all_entries_matches.length} items hidden</b>
+                    </summary>
+                    <div>
+                        ${allEntriesContent}
+                    </div>
+                </details>
+            </div>
+        `;
+    }
+
+    if (!html) html = `<div class="empty">No matching records found.</div>`;
+    document.getElementById("output").innerHTML = html;
+}
+
+async function investigate() {
+    const q = document.getElementById("query").value.trim();
+    if (!q) return;
+    currentSearchQuery = q;
+    document.getElementById("output").innerHTML = `<div class="empty">Searching indexed database for <b>${esc(q)}</b>...</div>`;
+    try {
+        const res = await fetch("/api/investigate?q=" + encodeURIComponent(q));
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+        render(data);
+    } catch (err) {
+        document.getElementById("output").innerHTML = `<div class="empty" style="color:#f87171;">Error executing search query.</div>`;
+    }
+}
+
+function renderPolicyContext(title, ctx) {
+    if (!ctx) return '';
+    let body = `<div class="item">`;
+    body += `<div class="meta"><b>Query:</b> ${esc(ctx.query || '')}</div>`;
+    if (ctx.networks && ctx.networks.length) {
+        body += `<div style="margin-top:8px"><b style="font-size:12px">Resolved networks</b><div>${ctx.networks.map(x => `<span class="rule-tag highlight">${esc(x)}</span>`).join(' ')}</div></div>`;
+    }
+    if (ctx.objects && ctx.objects.length) {
+        body += `<div style="margin-top:8px"><b style="font-size:12px">Objects</b><div>${ctx.objects.map(x => `<span class="rule-tag highlight">${esc(x.name || '')}</span>`).join(' ')}</div></div>`;
+    }
+    if (ctx.groups && ctx.groups.length) {
+        body += `<div style="margin-top:8px"><b style="font-size:12px">Groups</b><div>${ctx.groups.map(x => `<span class="rule-tag highlight">${esc(x.name || '')}</span>`).join(' ')}</div></div>`;
+    }
+    if (ctx.attached_security_groups && ctx.attached_security_groups.length) {
+        body += `<div style="margin-top:8px"><b style="font-size:12px">Direct AWS SGs</b><div>${ctx.attached_security_groups.map(x => `<span class="rule-tag highlight">${esc(x.name || x.data?.GroupId || '')}</span>`).join(' ')}</div></div>`;
+    }
+    body += `</div>`;
+    return section(title, (ctx.objects?.length || 0) + (ctx.groups?.length || 0), body);
+}
+
+async function executePolicyLookup() {
+    const src = document.getElementById("lookupSource").value.trim();
+    const dst = document.getElementById("lookupDest").value.trim();
+    const port = document.getElementById("lookupPort").value.trim();
+
+    if (!src && !dst) {
+        alert("Please enter at least a Source or Destination to search.");
+        return;
+    }
+
+    document.getElementById("policyLookupOutput").innerHTML = `<div class="empty">Resolving objects, groups, CIDRs and policy intersections...</div>`;
+
+    try {
+        const params = new URLSearchParams();
+        if (src) params.append("src", src);
+        if (dst) params.append("dst", dst);
+        if (port) params.append("port", port);
+
+        const res = await fetch("/api/policy-lookup?" + params.toString());
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+
+        let html = `<div class="summary">
+            <div class="card"><b>${data.summary?.objects || 0}</b><span>Objects</span></div>
+            <div class="card"><b>${data.summary?.groups || 0}</b><span>Groups</span></div>
+            <div class="card palo-card"><b>${data.summary?.rules || 0}</b><span>Matching Rules</span></div>
+            <div class="card palo-card"><b>${data.summary?.allow || 0}</b><span>Allow</span></div>
+            <div class="card"><b>${data.summary?.deny || 0}</b><span>Deny / Drop</span></div>
+        </div>`;
+
+        html += renderPolicyContext("Resolved Source", data.source_context);
+        html += renderPolicyContext("Resolved Destination", data.destination_context);
+
+        if (data.matched_objects?.length) {
+            html += section("Related Palo Alto Objects", data.matched_objects.length, data.matched_objects.map(x => itemHTML(x, "palo")).join(""));
+        }
+        if (data.matched_groups?.length) {
+            html += section("Related Palo Alto Groups / Members", data.matched_groups.length, data.matched_groups.map(x => itemHTML(x, "palo")).join(""));
+        }
+        if (data.matched_rules?.length) {
+            html += section("Matching Existing Firewall Rules", data.matched_rules.length, data.matched_rules.map(x => itemHTML(x, "palo")).join(""));
+        }
+        if (!data.matched_rules?.length) {
+            html += `<div class="empty">No existing PAN-OS rule intersects the resolved source/destination${port ? ` and service/port ${esc(port)}` : ''}.</div>`;
+        }
+        document.getElementById("policyLookupOutput").innerHTML = html;
+    } catch (err) {
+        document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Policy lookup failed: ${esc(err.message || err)}</div>`;
+    }
+}
+
+function buildTreeHTML(node, roleName) {
+    if (!node) return '';
+    let html = '';
+    const name = node.Name || node.Id || node.name || 'Unit';
+    const accounts = node.Accounts || node.AccountList || [];
+    const children = node.OUs || node.Children || node.SubOUs || [];
+
+    html += `<div class="tree-node">`;
+    html += `<span class="tree-folder">📁 ${esc(name)}</span>`;
+    
+    if (accounts.length > 0) {
+        html += `<div style="margin-left: 20px;">`;
+        accounts.forEach(acc => {
+            const accName = acc.Name || acc.Id;
+            const accId = acc.Id || acc.AccountId || '';
+            
+            let accountLabelHTML = `<b>${esc(accName)}</b> <span style="color:var(--text-secondary);">(${esc(accId)})</span>`;
+            if (roleName && accId) {
+                const switchUrl = `https://signin.aws.amazon.com/switchrole?account=${encodeURIComponent(accId)}&roleName=${encodeURIComponent(roleName)}`;
+                accountLabelHTML = `<a class="switch-link" href="${switchUrl}" target="_blank" title="Click to Switch Role in AWS Console">📄 ${esc(accName)} <span style="color:var(--text-secondary);">(${esc(accId)})</span> 🔗 Switch Role</a>`;
+            } else {
+                accountLabelHTML = `📄 ${accountLabelHTML}`;
+            }
+
+            html += `<div class="tree-leaf">${accountLabelHTML}</div>`;
+        });
+        html += `</div>`;
+    }
+
+    if (children.length > 0) {
+        html += `<div style="margin-left: 10px;">`;
+        children.forEach(child => html += buildTreeHTML(child, roleName));
+        html += `</div>`;
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+function renderOrgTreeWithRole() {
+    if (!currentOrgData) return;
+    const roleName = document.getElementById("crossRoleInput").value.trim();
+    document.getElementById("orgTreeView").innerHTML = buildTreeHTML(currentOrgData.Hierarchy || currentOrgData, roleName);
+}
+
+async function loadOrgTopology() {
+    try {
+        const r = await fetch("/api/topology/aws");
+        const data = await r.json();
+        if (data.error) {
+            document.getElementById("orgTreeView").innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+            return;
+        }
+        currentOrgData = data;
+        renderOrgTreeWithRole();
+        document.getElementById("orgMeta").textContent = "Loaded";
+    } catch(e) {
+        document.getElementById("orgTreeView").innerHTML = `<div class="empty">Unable to render topology tree.</div>`;
+    }
+}
+
+function buildPanTreeHTML(node) {
+    if (!node) return '';
+    let html = '';
+    
+    const groupName = node.Name || node.DeviceGroupName || node.TemplateGroupName || node.name || 'Group';
+    const groupType = node.Type || node.GroupType || (node.TemplateGroups ? 'Device Group' : 'Group');
+    const templateGroups = node.TemplateGroups || node.template_groups || [];
+    const firewalls = node.Firewalls || node.Devices || node.firewalls || [];
+
+    html += `<div class="tree-node">`;
+    html += `<span class="tree-folder">📁 ${esc(groupName)} <span class="badge blue">${esc(groupType)}</span></span>`;
+
+    if (templateGroups.length > 0) {
+        html += `<div style="margin-left: 20px;">`;
+        templateGroups.forEach(tg => {
+            const tgName = tg.Name || tg.TemplateGroupName || tg.name || 'Template Group';
+            const tgFirewalls = tg.Firewalls || tg.Devices || tg.firewalls || [];
+            
+            html += `<div class="tree-node">`;
+            html += `<span class="tree-folder" style="color: var(--gold);">📂 Template Group: ${esc(tgName)}</span>`;
+            
+            if (tgFirewalls.length > 0) {
+                html += `<div style="margin-left: 20px;">`;
+                tgFirewalls.forEach(fw => html += renderFirewallLeaf(fw));
+                html += `</div>`;
+            }
+            html += `</div>`;
+        });
+        html += `</div>`;
+    }
+
+    if (firewalls.length > 0) {
+        html += `<div style="margin-left: 20px;">`;
+        firewalls.forEach(fw => {
+            html += renderFirewallLeaf(fw);
+        });
+        html += `</div>`;
+    }
+
+    const subGroups = node.Groups || node.DeviceGroups || [];
+    if (subGroups.length > 0) {
+        html += `<div style="margin-left: 10px;">`;
+        subGroups.forEach(sub => html += buildPanTreeHTML(sub));
+        html += `</div>`;
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+function renderFirewallLeaf(fw) {
+    const hostname = fw.Hostname || fw.hostname || fw.Name || fw.name || 'Unknown Firewall';
+    const serial = fw.Serial || fw.serial || 'N/A';
+    const description = fw.Description || fw.description || '';
+    const ip = fw.ManagementIP || fw.ip || fw.ManagementIp || fw.MGMT_IP || 'IP not specified';
+
+    return `
+        <div class="tree-leaf">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                <div>
+                    🔥 <b>${esc(hostname)}</b> 
+                    <span style="color: var(--text-secondary); font-size: 11px; margin-left: 6px;">Serial: <b>${esc(serial)}</b></span>
+                </div>
+                <div>
+                    <span class="badge" style="background: #2f3036; color: var(--gold);">IP: ${esc(ip)}</span>
+                </div>
+            </div>
+            ${description ? `<div style="font-size: 11.5px; color: var(--text-secondary); margin-top: 4px;">Description: ${esc(description)}</div>` : ''}
+        </div>
+    `;
+}
+
+async function loadPanTopology() {
+    try {
+        const r = await fetch("/api/topology/pan");
+        const data = await r.json();
+        if (data.error) {
+            document.getElementById("panTreeView").innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+            document.getElementById("panMeta").textContent = "Error";
+            return;
+        }
+        
+        let treeHtml = "";
+        const rootNodes = data.DeviceGroups || data.Groups || (Array.isArray(data) ? data : [data]);
+        rootNodes.forEach(group => {
+            treeHtml += buildPanTreeHTML(group);
+        });
+
+        document.getElementById("panTreeView").innerHTML = treeHtml || `<div class="empty">No Panorama topology hierarchy nodes found.</div>`;
+        document.getElementById("panMeta").textContent = "Loaded";
+    } catch(e) {
+        document.getElementById("panTreeView").innerHTML = `<div class="empty">Unable to render Panorama topology.</div>`;
+        document.getElementById("panMeta").textContent = "Failed";
+    }
+}
+
+async function loadAutomationResults() {
+    try {
+        const r = await fetch("/api/automation/status");
+        const data = await r.json();
+        document.getElementById("awsOrgDate").innerHTML = `<b>File Date:</b> ${esc(data.aws_org_mtime)}`;
+        document.getElementById("awsDataDate").innerHTML = `<b>File Date:</b> ${esc(data.aws_data_mtime)}`;
+        document.getElementById("panOrgDate").innerHTML = `<b>File Date:</b> ${esc(data.pan_org_mtime)}`;
+        document.getElementById("panDataDate").innerHTML = `<b>File Date:</b> ${esc(data.pan_data_mtime)}`;
+    } catch(e) {}
+}
+
+async function loadStats() {
+    try {
+        const r = await fetch("/api/stats");
+        const data = await r.json();
+        
+        let awsHTML = `<table class="prop-table">`;
+        for (const [k, v] of Object.entries(data.aws_resources || {})) {
+            awsHTML += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
+        }
+        awsHTML += `</table>`;
+        document.getElementById("awsStats").innerHTML = awsHTML;
+
+        let panosHTML = `<table class="prop-table">`;
+        for (const [k, v] of Object.entries(data.panos || {})) {
+            panosHTML += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
+        }
+        panosHTML += `</table>`;
+        document.getElementById("panosStats").innerHTML = panosHTML;
+    } catch(e) {}
+}
+
+function clearAll() {
+    document.getElementById("query").value = "";
+    document.getElementById("summary").innerHTML = "";
+    document.getElementById("output").innerHTML = `<div class="empty">Enter a query above to start exploring your infrastructure.</div>`;
+}
+
+document.getElementById("query").addEventListener("keydown", e => { if (e.key === "Enter") investigate(); });
+["lookupSource", "lookupDest", "lookupPort"].forEach(id => {
+    document.getElementById(id).addEventListener("keydown", e => { if (e.key === "Enter") executePolicyLookup(); });
+});
+
+async function loadInfo() {
+    try {
+        const r = await fetch("/api/info");
+        const x = await r.json();
+        document.getElementById("dataInfo").innerHTML = `<b>Database:</b> ${x.files} items | ${x.devices} devices`;
+    } catch(e) {}
+}
+
+loadInfo();
+</script>
+</body>
+</html>
