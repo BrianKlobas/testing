@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-"""Flask application for Infrastructure Intelligence.
-
-IMPORTANT: this module does NOT ingest source JSON. Run ingest.py separately
-when the source JSON changes, then start this app for fast development/testing:
-    python app.py
-"""
 from __future__ import annotations
 
 import argparse
@@ -358,10 +351,6 @@ class InfrastructureDataSource:
                             if isinstance(block, dict) and block.get("CidrBlock"):
                                 related_cidrs_to_match.add(str(block["CidrBlock"]))
 
-            # Palo Alto object/address/group lookup using the search itself plus
-            # AWS subnet/VPC CIDRs discovered from matching EC2/RDS/ENI resources.
-            # For an IP such as 10.20.30.15 this intentionally searches:
-            #   10.20.30.15/32 -> subnet CIDR -> VPC CIDR
             all_target_nets = [query_network] if query_network else []
             for cidr in related_cidrs_to_match:
                 net_obj = extract_ip_or_cidr(cidr)
@@ -402,7 +391,6 @@ class InfrastructureDataSource:
                         })
                         break
 
-            # Security groups directly attached to matched AWS resources.
             for dev_name, sg_id in attached_sg_ids:
                 cursor.execute(
                     """
@@ -477,7 +465,6 @@ class InfrastructureDataSource:
                             matched_object_names.add(str(obj_name))
                         _classify_panos_record(row, item_data, output)
 
-                # Expand object/group references transitively.
                 expanded = True
                 while expanded:
                     expanded = False
@@ -539,7 +526,6 @@ class InfrastructureDataSource:
             conn.close()
 
     def policy_lookup(self, src_query: str = "", dst_query: str = "", port_query: str = "") -> list[dict[str, Any]]:
-        """Find PAN-OS rules where source, destination and optional service all intersect."""
         src_query = src_query.strip().lower()
         dst_query = dst_query.strip().lower()
         port_query = port_query.strip().lower()
