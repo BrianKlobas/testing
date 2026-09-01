@@ -17,6 +17,7 @@ from database import DEFAULT_DB_PATH, get_db, init_db
 DEFAULT_FW_DATA_ROOT = Path(__file__).resolve().parent / "parsed"
 DEFAULT_AWS_DATA_ROOT = Path(__file__).resolve().parent / "aws_parsed"
 
+
 def _json_candidates(data: Any) -> list[dict[str, Any]]:
     candidates = data if isinstance(data, list) else [data]
     return [item for item in candidates if isinstance(item, dict)]
@@ -92,11 +93,7 @@ def ingest_data(
 
                 rel = path.relative_to(fw_root)
                 device = rel.parts[0] if len(rel.parts) > 1 else "(root)"
-                file_type = path.stem
-                # In ingest.py for PAN-OS files:
                 file_type = path.stem.replace("-", "_").lower()
-                # In ingest.py for AWS files:
-                service_type = path.stem.replace("-", "_").lower()
 
                 try:
                     with path.open("r", encoding="utf-8") as handle:
@@ -136,7 +133,7 @@ def ingest_data(
                     continue
 
                 account_name = rel.parts[0]
-                service_type = path.stem
+                service_type = path.stem.replace("-", "_").lower()
 
                 try:
                     with path.open("r", encoding="utf-8") as handle:
@@ -205,3 +202,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+```[cite: 3]
