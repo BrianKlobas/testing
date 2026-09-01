@@ -100,64 +100,70 @@ class InfrastructureDataSource:
         conn.close()
         return count
 
-    def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
-        conn = get_db(self.db_file)
-        cursor = conn.cursor()
-        results = []
-        
-        # Check if the query is an IP address or CIDR block
-        ip_net = extract_ip_or_cidr(query)
-        if ip_net:
-            cursor.execute(
-                """
-                SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
-                FROM records r
-                JOIN devices d ON r.device_id = d.id
-                WHERE IP_CONTAINS(?, r.data) = 1
-                LIMIT ?
-                """,
-                (query, limit)
-            )
-        else:
-            # Use SQLite FTS5 full-text search index
-            fts_query = f'"{query}"*' if " " not in query else query
-            try:
-                cursor.execute(
-                    """
-                    SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
-                    FROM records_fts fts
-                    JOIN records r ON fts.rowid = r.id
-                    JOIN devices d ON r.device_id = d.id
-                    WHERE records_fts MATCH ?
-                    LIMIT ?
-                    """,
-                    (fts_query, limit)
-                )
-            except sqlite3.OperationalError:
-                # Fallback to standard LIKE search if query syntax is unusual
+def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
+        try:
+            conn = get_db(self.db_file)
+            cursor = conn.cursor()
+            results = []
+            
+            # Check if the query is an IP address or CIDR block
+            ip_net = extract_ip_or_cidr(query)
+            if ip_net:
                 cursor.execute(
                     """
                     SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
                     FROM records r
                     JOIN devices d ON r.device_id = d.id
-                    WHERE r.name LIKE ? OR r.data LIKE ?
+                    WHERE IP_CONTAINS(?, r.data) = 1
                     LIMIT ?
                     """,
-                    (f"%{query}%", f"%{query}%", limit)
+                    (query, limit)
                 )
+            else:
+                # Sanitize query for FTS5 to avoid syntax errors with special characters
+                clean_query = ''.join(c if c.isalnum() or c.isspace() else ' ' for c in query).strip()
+                fts_query = f'"{clean_query}"*' if clean_query and " " not in clean_query else (clean_query or query)
+                
+                try:
+                    cursor.execute(
+                        """
+                        SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
+                        FROM records_fts fts
+                        JOIN records r ON fts.rowid = r.id
+                        JOIN devices d ON r.device_id = d.id
+                        WHERE records_fts MATCH ?
+                        LIMIT ?
+                        """,
+                        (fts_query, limit)
+                    )
+                except sqlite3.OperationalError:
+                    # Fallback to standard LIKE search if FTS syntax fails
+                    cursor.execute(
+                        """
+                        SELECT r.id, r.platform, r.category, r.filename, r.name, r.data, d.name as device_name
+                        FROM records r
+                        JOIN devices d ON r.device_id = d.id
+                        WHERE r.name LIKE ? OR r.data LIKE ?
+                        LIMIT ?
+                        """,
+                        (f"%{query}%", f"%{query}%", limit)
+                    )
 
-        rows = cursor.fetchall()
-        for row in rows:
-            results.append({
-                "id": row["id"],
-                "platform": row["platform"],
-                "category": row["category"],
-                "filename": row["filename"],
-                "name": row["name"],
-                "device": row["device_name"],
-                "data": json.loads(row["data"]) if row["data"] else {}
-            })
-        conn.close()
-        return {"query": query, "count": len(results), "results": results}
+            rows = cursor.fetchall()
+            for row in rows:
+                results.append({
+                    "id": row["id"],
+                    "platform": row["platform"],
+                    "category": row["category"],
+                    "filename": row["filename"],
+                    "name": row["name"],
+                    "device": row["device_name"],
+                    "data": json.loads(row["data"]) if row["data"] else {}
+                })
+            conn.close()
+            return {"query": query, "count": len(results), "results": results}
+            
+        except Exception as e:
+            return {"error": str(e), "query": query, "count": 0, "results": []}
 
 PANOS = InfrastructureDataSource()
