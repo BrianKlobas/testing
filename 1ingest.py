@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+#python3 -c "path = 'ingest.py'; content = path.read_text('utf-8').replace('\xa0', ' '); path.write_text(content, 'utf-8')"
 """Standalone JSON -> SQLite ingestion process.
 
 Run this independently whenever the parsed AWS/PAN-OS JSON changes:
