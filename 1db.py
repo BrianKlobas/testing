@@ -12,7 +12,6 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
 
-    # Core records table for PAN-OS and AWS intelligence
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +25,6 @@ def init_db():
         )
     """)
 
-    # Topology mapping table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS topology (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +34,6 @@ def init_db():
         )
     """)
 
-    # Automation execution results table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS automation_results (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,14 +44,12 @@ def init_db():
         )
     """)
 
-    # High-performance indices for optimized multi-join and filter lookups
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_plat_cat ON records(platform, category)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_device ON records(device_id)")
     conn.commit()
     conn.close()
 
 def investigate(device_id=None, platform=None, category=None, src=None, dst=None, port=None):
-    # Safe initialization of palo_matches to prevent downstream KeyError states
     output = {
         "palo_matches": [],
         "device_id": device_id,
