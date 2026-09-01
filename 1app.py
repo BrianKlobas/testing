@@ -99,7 +99,6 @@ def _clean_fts_query(query: str) -> str:
     # Use NEAR or simple prefix matching safely without forcing strict phrase wrapping unless quoted
     return " ".join(f"{t}*" for t in tokens)
 
-
 def _classify_panos_record(row: Any, item_payload: Any, output: dict[str, Any]) -> None:
     filename = str(row["filename"]).lower()
     category = str(row["category"]).lower()
@@ -241,7 +240,7 @@ class InfrastructureDataSource:
             else:
                 clean_q = _clean_fts_query(query)
                 if clean_q:
-                    fts_query = f'"{clean_q}"*'
+                    fts_query = clean_q
                     cursor.execute(
                         """
                         SELECT r.id, d.name AS device, r.platform, r.category,
@@ -484,8 +483,10 @@ class InfrastructureDataSource:
 
                 # Expand object/group references transitively.
                 expanded = True
-                while expanded:
+                expansion_depth = 0
+                while expanded and expansion_depth < 5:
                     expanded = False
+                    expansion_depth += 1
                     for row in all_panos_records:
                         if row["id"] in matched_panos_ids:
                             continue
@@ -493,9 +494,9 @@ class InfrastructureDataSource:
                             item_data = json.loads(row["data"])
                         except json.JSONDecodeError:
                             continue
-                        data_str = json.dumps(item_data)
+                        data_str = row["data"]
                         for name in list(matched_object_names):
-                            if re.search(r"\b" + re.escape(name) + r"\b", data_str):
+                            if name and re.search(r"\b" + re.escape(name) + r"\b", data_str, re.IGNORECASE):
                                 matched_panos_ids.add(row["id"])
                                 eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
                                 obj_name = row["name"] or (
@@ -509,7 +510,7 @@ class InfrastructureDataSource:
             else:
                 clean_q = _clean_fts_query(query)
                 if clean_q:
-                    fts_query = f'"{clean_q}"*'
+                    fts_query = clean_q
                     cursor.execute(
                         """
                         SELECT r.id, d.name AS device, r.platform, r.category,
