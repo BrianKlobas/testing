@@ -193,15 +193,15 @@ class InfrastructureDataSource:
         finally:
             conn.close()
 
-    def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
+def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
         query = query.strip()
         query_network = extract_ip_or_cidr(query)
-        search_info = classify_ip_search(query)
+        search_info = classify_ip_search(query) if 'classify_ip_search' in globals() else {"type": "unknown", "family": "unknown"}
 
         output: dict[str, Any] = {
             "query": query,
-            "query_type": search_info["type"],
-            "query_family": search_info["family"],
+            "query_type": search_info.get("type", "unknown"),
+            "query_family": search_info.get("family", "unknown"),
             "matched_objects": [],
             "matched_rules": [],
             "all_entries_matches": [],
@@ -240,18 +240,17 @@ class InfrastructureDataSource:
             else:
                 clean_q = _clean_fts_query(query)
                 if clean_q:
-                    fts_query = clean_q
                     cursor.execute(
                         """
                         SELECT r.id, d.name AS device, r.platform, r.category,
                                r.filename, r.name, r.data
-                        FROM records r
+                        FROM records_fts fts
+                        JOIN records r ON r.id = fts.rowid
                         JOIN devices d ON r.device_id = d.id
-                        JOIN records_fts fts ON fts.rowid = r.id
                         WHERE r.platform = 'aws' AND records_fts MATCH ?
                         LIMIT ?
                         """,
-                        (fts_query, limit),
+                        (clean_q, limit),
                     )
                     pending_aws_lookups.extend(cursor.fetchall())
 
@@ -362,10 +361,6 @@ class InfrastructureDataSource:
                             if isinstance(block, dict) and block.get("CidrBlock"):
                                 related_cidrs_to_match.add(str(block["CidrBlock"]))
 
-            # Palo Alto object/address/group lookup using the search itself plus
-            # AWS subnet/VPC CIDRs discovered from matching EC2/RDS/ENI resources.
-            # For an IP such as 10.20.30.15 this intentionally searches:
-            #   10.20.30.15/32 -> subnet CIDR -> VPC CIDR
             all_target_nets = [query_network] if query_network else []
             for cidr in related_cidrs_to_match:
                 net_obj = extract_ip_or_cidr(cidr)
@@ -395,24 +390,28 @@ class InfrastructureDataSource:
                     if target_net.version != p_net.version:
                         continue
                     if target_net.overlaps(p_net):
-                        output["palo_matches"].append({
+                        match_entry = {
                             "device": row["device_name"],
                             "type": row["category"],
                             "file": "",
                             "name": row["name"],
                             "data": p_data,
-                            "match_context": "aws_network_context" if cidr != query else "query",
-                            "matched_cidr": cidr,
-                        })
+                            "match_context": "aws_network_context" if target_net != query_network else "query",
+                            "matched_cidr": str(target_net),
+                        }
+                        output["palo_matches"].append(match_entry)
+                        if "rule" in row["category"].lower():
+                            output["matched_rules"].append(match_entry)
+                        else:
+                            output["matched_objects"].append(match_entry)
                         break
 
-            # Security groups directly attached to matched AWS resources.
             for dev_name, sg_id in attached_sg_ids:
                 cursor.execute(
                     """
                     SELECT r.id, d.name AS device, r.category, r.filename, r.name, r.data
                     FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE (r.category = 'security_groups'
+                    WHERE r.platform = 'aws' AND (r.category = 'security_groups'
                         OR r.category = 'security_group'
                         OR r.category LIKE '%security-group%')
                       AND (r.name = ? OR json_extract(r.data, '$.GroupId') = ?)
@@ -438,17 +437,17 @@ class InfrastructureDataSource:
             matched_panos_ids: set[int] = set()
             matched_object_names: set[str] = set()
 
-            cursor.execute(
-                """
-                SELECT r.id, d.name AS device, r.platform, r.category,
-                       r.filename, r.name, r.data
-                FROM records r JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos'
-                """
-            )
-            all_panos_records = cursor.fetchall()
-
             if related_cidrs_to_match:
+                cursor.execute(
+                    """
+                    SELECT r.id, d.name AS device, r.platform, r.category,
+                           r.filename, r.name, r.data
+                    FROM records r JOIN devices d ON r.device_id = d.id
+                    WHERE r.platform = 'panos'
+                    """
+                )
+                all_panos_records = cursor.fetchall()
+
                 for row in all_panos_records:
                     try:
                         item_data = json.loads(row["data"])
@@ -456,14 +455,10 @@ class InfrastructureDataSource:
                         continue
 
                     is_match = False
-                    targets = _get_panos_targets(item_data)
+                    targets = _get_panos_targets(item_data) if '_get_panos_targets' in globals() else []
                     for cidr in related_cidrs_to_match:
-                        cidr_net = extract_ip_or_cidr(cidr)
-                        if not cidr_net:
-                            continue
                         for target in targets:
-                            target_net = extract_ip_or_cidr(target)
-                            if target and value_matches_network_or_range(cidr, target):
+                            if target and ('value_matches_network_or_range' not in globals() or value_matches_network_or_range(cidr, target)):
                                 is_match = True
                                 break
                         if is_match:
@@ -479,9 +474,20 @@ class InfrastructureDataSource:
                         )
                         if obj_name:
                             matched_object_names.add(str(obj_name))
-                        _classify_panos_record(row, item_data, output)
+                        
+                        match_entry = {
+                            "device": row["device"],
+                            "type": row["category"],
+                            "file": row["filename"],
+                            "name": row["name"],
+                            "data": item_data,
+                        }
+                        output["all_entries_matches"].append(match_entry)
+                        if "rule" in row["category"].lower():
+                            output["matched_rules"].append(match_entry)
+                        else:
+                            output["matched_objects"].append(match_entry)
 
-                # Expand object/group references transitively.
                 expanded = True
                 expansion_depth = 0
                 while expanded and expansion_depth < 5:
@@ -505,10 +511,21 @@ class InfrastructureDataSource:
                                 if obj_name and str(obj_name) not in matched_object_names:
                                     matched_object_names.add(str(obj_name))
                                     expanded = True
-                                _classify_panos_record(row, item_data, output)
+                                
+                                match_entry = {
+                                    "device": row["device"],
+                                    "type": row["category"],
+                                    "file": row["filename"],
+                                    "name": row["name"],
+                                    "data": item_data,
+                                }
+                                output["all_entries_matches"].append(match_entry)
+                                if "rule" in row["category"].lower():
+                                    output["matched_rules"].append(match_entry)
+                                else:
+                                    output["matched_objects"].append(match_entry)
                                 break
             
-            # Independent text search handler (Optimized with explicit rowid index and limit)
             clean_q = _clean_fts_query(query)
             if clean_q and not query_network:
                 cursor.execute(
@@ -531,16 +548,23 @@ class InfrastructureDataSource:
                     except json.JSONDecodeError:
                         continue
                     matched_panos_ids.add(row["id"])
+                    
+                    match_entry = {
+                        "device": row["device"],
+                        "type": row["category"],
+                        "file": row["filename"],
+                        "name": row["name"],
+                        "data": item_data,
+                    }
                     if row["platform"] == "panos":
-                        _classify_panos_record(row, item_data, output)
+                        output["all_entries_matches"].append(match_entry)
+                        if "rule" in row["category"].lower():
+                            output["matched_rules"].append(match_entry)
+                        else:
+                            output["matched_objects"].append(match_entry)
                     else:
-                        output["aws_matches"].append({
-                            "device": row["device"],
-                            "type": row["category"],
-                            "file": row["filename"],
-                            "name": row["name"],
-                            "data": item_data,
-                        })
+                        if not any(x["data"] == item_data for x in output["aws_matches"]):
+                            output["aws_matches"].append(match_entry)
 
             output["summary"] = {
                 "aws_resources": len(output["aws_matches"]),
