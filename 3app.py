@@ -791,32 +791,55 @@ class InfrastructureDataSource:
                 pan_base = _base_search(conn, query, platform="panos", limit=limit)
                 aws_base = _base_search(conn, query, platform="aws", limit=limit)
 
-                # Some older AWS collector outputs have the endpoint IP in the raw
-                # JSON but not in the network index.  Use the exact indexed scalar
-                # term first, then a narrowly scoped JSON fallback for AWS resource
-                # records.  This keeps /32 lookups reliable without broad scans.
-                if not aws_base:
-                    target_ip = str(network_bounds(query)[1]) if network_bounds(query) else query.split("/", 1)[0].strip()
+                # Always augment the network-index result with exact endpoint matches.
+                # A /32 can legitimately hit a VPC/subnet network first; that must
+                # never prevent us from also returning the EC2/ENI/RDS/Route53
+                # record that actually owns or contains the IP.
+                bounds = network_bounds(query)
+                target_ip = str(bounds[1]) if bounds and bounds[0] in (4, 6) else query.split("/", 1)[0].strip()
+                exact_ids: list[int] = []
+
+                rows = conn.execute("""
+                    SELECT DISTINCT rt.record_id
+                    FROM record_terms rt JOIN records r ON r.id=rt.record_id
+                    WHERE r.platform='aws' AND rt.term_lower=?
+                    LIMIT ?
+                """, (target_ip.lower(), limit)).fetchall()
+                exact_ids.extend(int(x[0]) for x in rows)
+
+                # Older databases may have the endpoint only in raw JSON. SQLite
+                # JSON1 gives us an exact recursive scalar lookup regardless of
+                # whether the collector stored EC2/ENI/RDS/R53 data as nested blobs.
+                try:
                     rows = conn.execute("""
                         SELECT DISTINCT r.id
-                        FROM record_terms rt JOIN records r ON r.id=rt.record_id
-                        WHERE r.platform='aws' AND rt.term_lower=?
+                        FROM records r, json_tree(r.data) jt
+                        WHERE r.platform='aws'
+                          AND jt.type IN ('text','integer','real')
+                          AND lower(CAST(jt.value AS TEXT))=?
                         LIMIT ?
                     """, (target_ip.lower(), limit)).fetchall()
-                    if rows:
-                        aws_base = fetch_records_by_ids(conn, [int(x[0]) for x in rows])
-                if not aws_base:
-                    target_ip = str(network_bounds(query)[1]) if network_bounds(query) else query.split("/", 1)[0].strip()
+                    exact_ids.extend(int(x[0]) for x in rows)
+                except sqlite3.OperationalError:
+                    pass
+
+                # Final compatibility fallback for databases without JSON1.
+                if not exact_ids:
                     rows = conn.execute("""
                         SELECT r.id
                         FROM records r
                         WHERE r.platform='aws'
-                          AND (r.category LIKE '%instance%' OR r.category LIKE '%network_interface%' OR r.category LIKE '%eni%' OR r.category LIKE '%rds%' OR r.category LIKE '%load_balancer%')
-                          AND r.data LIKE ?
+                          AND (r.category LIKE '%instance%' OR r.category LIKE '%network_interface%'
+                               OR r.category LIKE '%eni%' OR r.category LIKE '%rds%'
+                               OR r.category LIKE '%load_balancer%' OR r.category LIKE '%route53%'
+                               OR r.category LIKE '%hosted%')
+                          AND lower(r.data) LIKE ?
                         LIMIT ?
-                    """, (f'%{target_ip}%', limit)).fetchall()
-                    if rows:
-                        aws_base = fetch_records_by_ids(conn, [int(x[0]) for x in rows])
+                    """, (f'%{target_ip.lower()}%', limit)).fetchall()
+                    exact_ids.extend(int(x[0]) for x in rows)
+
+                if exact_ids:
+                    aws_base = _dedupe_rows(aws_base + fetch_records_by_ids(conn, exact_ids))
                 base = _dedupe_rows(pan_base + aws_base)
             else:
                 base = _base_search(conn, query, limit=limit)
