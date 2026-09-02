@@ -192,6 +192,8 @@ button.secondary { background: var(--bg-card); color: var(--text-primary); borde
     text-transform: uppercase;
 }
 .status-pill.success { background: rgba(251, 198, 0, 0.2); color: var(--gold); border: 1px solid var(--gold); }
+.status-pill.danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid #f87171; }
+.status-pill.neutral { background: rgba(148, 163, 184, 0.15); color: var(--text-secondary); border: 1px solid var(--border-color); }
 
 .section {
     background: var(--bg-surface);
@@ -330,7 +332,7 @@ summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600
 .about-card p { margin: 4px 0; font-size: 13px; color: var(--text-primary); }
 </style>
 <style>
-.palo-type-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}.palo-type-block{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--panel)}.palo-type-block>summary{cursor:pointer;padding:13px 15px;font-weight:700;background:#2f3036;list-style:none}.palo-type-block>summary::-webkit-details-marker{display:none}.palo-type-block>summary:before{content:'▸';margin-right:8px;color:var(--accent)}.palo-type-block[open]>summary:before{content:'▾'}.palo-type-body{padding:8px}.policy-endpoint-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.policy-endpoint{min-width:0}@media(max-width:850px){.policy-endpoint-grid{grid-template-columns:1fr}}
+.palo-type-grid{display:block}.palo-type-block{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--panel)}.palo-type-block>summary{cursor:pointer;padding:13px 15px;font-weight:700;background:#2f3036;list-style:none}.palo-type-block>summary::-webkit-details-marker{display:none}.palo-type-block>summary:before{content:'▸';margin-right:8px;color:var(--accent)}.palo-type-block[open]>summary:before{content:'▾'}.palo-type-body{padding:8px}.policy-endpoint-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.automation-extra{margin-top:10px;padding-top:8px;border-top:1px dashed var(--border-color)}.policy-endpoint{min-width:0}@media(max-width:850px){.policy-endpoint-grid{grid-template-columns:1fr}}
 </style>
 </head>
 
@@ -450,50 +452,15 @@ summary { color: var(--gold); cursor: pointer; font-size: 12px; font-weight: 600
     <div id="tab-automation" class="tab-content">
         <div class="section">
             <div class="section-title">
-                <h2>Automation Job & Collection Results</h2>
-                <span class="count">Live Status</span>
+                <h2>Automation Results</h2>
+                <span class="count" id="automationCount">Loading...</span>
             </div>
-            <div style="padding: 20px;">
-                <h3 style="margin-top: 0; font-size: 15px;">AWS Automated Collections</h3>
-                <div class="status-grid">
-                    <div class="status-card">
-                        <div class="status-card-header">
-                            <span class="status-title">AWS Org Collection</span>
-                            <span class="status-pill success">Successful</span>
-                        </div>
-                        <div class="meta"><b>Source File:</b> org_topology.json</div>
-                        <div class="meta" id="awsOrgDate"><b>File Date:</b> Loading...</div>
-                    </div>
-
-                    <div class="status-card">
-                        <div class="status-card-header">
-                            <span class="status-title">AWS Resource Data Collection</span>
-                            <span class="status-pill success">Successful</span>
-                        </div>
-                        <div class="meta"><b>Source Directory:</b> ./aws_parsed</div>
-                        <div class="meta" id="awsDataDate"><b>File Date:</b> Loading...</div>
-                    </div>
+            <div style="padding:20px;">
+                <div class="hint" style="margin-bottom:14px;">
+                    JSON files from <code>./automation_results</code> are displayed automatically. Add as many automation result files as needed; each file becomes one result card.
                 </div>
-
-                <h3 style="margin-top: 24px; font-size: 15px;">Palo Alto Automated Collections</h3>
-                <div class="status-grid">
-                    <div class="status-card">
-                        <div class="status-card-header">
-                            <span class="status-title">Panorama Topology Collection</span>
-                            <span class="status-pill success">Successful</span>
-                        </div>
-                        <div class="meta"><b>Source File:</b> panorama_topology.json</div>
-                        <div class="meta" id="panOrgDate"><b>File Date:</b> Loading...</div>
-                    </div>
-
-                    <div class="status-card">
-                        <div class="status-card-header">
-                            <span class="status-title">Palo Alto Data Collection</span>
-                            <span class="status-pill success">Successful</span>
-                        </div>
-                        <div class="meta"><b>Source Directory:</b> ./parsed</div>
-                        <div class="meta" id="panDataDate"><b>File Date:</b> Loading...</div>
-                    </div>
+                <div id="automationResults" class="status-grid">
+                    <div class="empty">Loading automation results...</div>
                 </div>
             </div>
         </div>
@@ -1191,16 +1158,36 @@ async function loadPanTopology() {
 }
 
 async function loadAutomationResults() {
+    const container=document.getElementById("automationResults");
+    const count=document.getElementById("automationCount");
     try {
-        const r = await fetch("/api/automation/status");
-        const data = await r.json();
-        document.getElementById("awsOrgDate").innerHTML = `<b>File Date:</b> ${esc(data.aws_org_mtime)}`;
-        document.getElementById("awsDataDate").innerHTML = `<b>File Date:</b> ${esc(data.aws_data_mtime)}`;
-        document.getElementById("panOrgDate").innerHTML = `<b>File Date:</b> ${esc(data.pan_org_mtime)}`;
-        document.getElementById("panDataDate").innerHTML = `<b>File Date:</b> ${esc(data.pan_data_mtime)}`;
-    } catch(e) {}
+        const r=await fetch("/api/automation/results");
+        const data=await r.json();
+        const results=data.results||[];
+        count.textContent=`${results.length} Result${results.length===1?'':'s'}`;
+        if(!results.length){
+            container.innerHTML=`<div class="empty" style="grid-column:1/-1;">No automation result JSON files found in <code>./automation_results</code>.</div>`;
+            return;
+        }
+        container.innerHTML=results.map((x,idx)=>{
+            const status=String(x.status??"Unknown");
+            const statusClass=/success|complete|completed|ok|passed/i.test(status)?"success":/fail|error/i.test(status)?"danger":"neutral";
+            const extras=Object.entries(x.extra||{});
+            return `<div class="status-card">
+                <div class="status-card-header">
+                    <span class="status-title">${esc(x.name||`Automation ${idx+1}`)}</span>
+                    <span class="status-pill ${statusClass}">${esc(status)}</span>
+                </div>
+                <div class="meta"><b>Last Run:</b> ${esc(x.lastrun||"Not provided")}</div>
+                <div class="meta"><b>JSON:</b> ${esc(x.file||"")}</div>
+                ${extras.length?`<div class="automation-extra">${extras.map(([k,v])=>`<div class="meta"><b>${esc(k)}:</b> ${esc(typeof v==='object'?JSON.stringify(v):String(v))}</div>`).join('')}</div>`:''}
+            </div>`;
+        }).join('');
+    } catch(e) {
+        count.textContent="Error";
+        container.innerHTML=`<div class="empty" style="color:#f87171;">Unable to load automation results.</div>`;
+    }
 }
-
 async function loadStats() {
     try {
         const r = await fetch("/api/stats");
