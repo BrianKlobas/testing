@@ -666,17 +666,14 @@ function esc(value) {
 }
 function jsonStr(value) { return esc(JSON.stringify(value, null, 2)); }
 
-function setSummary(s, timing = null) {
-    const t = timing && timing.total_ms !== undefined ? `<div class="card"><b>${esc(timing.total_ms)} ms</b><span>Search Time</span></div>` : '';
+function setSummary(s) {
     document.getElementById("summary").innerHTML = `
         <div class="summary">
-            <div class="card"><b>${s.aws_resources}</b><span>AWS Resources</span></div>
-            <div class="card"><b>${s.attached_sgs}</b><span>Attached Security Groups</span></div>
-            <div class="card palo-card"><b>${s.palo_objects || 0}</b><span>Palo Alto Objects</span></div>
-            <div class="card palo-card"><b>${s.palo_groups || 0}</b><span>Palo Alto Groups</span></div>
-            <div class="card palo-card"><b>${s.palo_rules || 0}</b><span>Palo Alto Security & NAT Rules</span></div>
-            <div class="card" style="border-color:var(--border-color);"><b>${s.all_entries || 0}</b><span>Raw All-Entries Items</span></div>
-            ${t}
+            <div class="card"><b>${s.aws_resources || 0}</b><span>AWS Resources</span></div>
+            <div class="card"><b>${s.attached_sgs || 0}</b><span>Attached Security Groups</span></div>
+            <div class="card palo-card"><b>${s.palo_objects || 0}</b><span>Palo Address Objects</span></div>
+            <div class="card palo-card"><b>${s.palo_groups || 0}</b><span>Palo Address Groups</span></div>
+            <div class="card palo-card"><b>${s.palo_rules || 0}</b><span>Palo Security / NAT Rules</span></div>
         </div>
     `;
 }
@@ -972,11 +969,7 @@ function itemHTML(x, badgeClass) {
                     <span class="badge ${badgeClass}">${esc(x.type)}</span>
                 </div>
             </div>
-            <div class="meta">Source File: ${esc(x.file || '')}</div>
-            ${x.match_reason ? `<div class="meta"><b>Relationship:</b> ${esc(x.match_reason)}${x.matched_value ? ` — ${esc(x.matched_value)}` : ''}</div>` : ''}
-            ${x.decision ? `<div class="meta"><b>Decision:</b> <strong>${esc(x.decision)}</strong> &nbsp; <b>Action:</b> ${esc(x.action || '')}</div>` : ''}
-            ${x.attachment_scope ? `<div class="meta"><b>Attachment:</b> ${esc(x.attachment_scope)}</div>` : ''}
-            ${x.match_details ? `<div class="meta"><b>Matched by:</b> Source ${esc((x.match_details.source || []).join(', '))} | Destination ${esc((x.match_details.destination || []).join(', '))}${x.match_details.port_query ? ` | Port ${esc(x.match_details.port_query)}` : ''}</div>` : ''}
+            <div class="meta">Source File: ${esc(x.file)}</div>
             ${extraDetails}
             <details style="margin-top: 12px;">
                 <summary>View Full Raw JSON Payload</summary>
@@ -987,32 +980,38 @@ function itemHTML(x, badgeClass) {
 }
 
 function render(data) {
-    setSummary(data.summary, data.timing);
-    let html = "";
-    if (data.aws_matches.length) html += section("Matching AWS Resources", data.aws_matches.length, data.aws_matches.map(x => itemHTML(x, "aws")).join(""));
-    if (data.attached_security_groups.length) html += section("Attached Security Groups", data.attached_security_groups.length, data.attached_security_groups.map(x => itemHTML(x, "sg")).join(""));
-    if (data.network_context && data.network_context.length) {
-        const ctx = data.network_context.map(x => `<span class="rule-tag highlight" title="${esc(x.source || '')}">${esc(x.value)}${x.source ? ` <small>(${esc(x.source)})</small>` : ''}</span>`).join(' ');
-        html += section("Resolved Network Context", data.network_context.length, `<div class="item">${ctx}</div>`);
+    if (data.error) {
+        document.getElementById("output").innerHTML = `<div class="empty" style="color:#f87171;">${esc(data.error)}</div>`;
+        return;
     }
-    if (data.matched_objects && data.matched_objects.length) html += section("Palo Alto Address / Related Objects", data.matched_objects.length, data.matched_objects.map(x => itemHTML(x, "palo")).join(""));
-    if (data.matched_groups && data.matched_groups.length) html += section("Palo Alto Object Groups", data.matched_groups.length, data.matched_groups.map(x => itemHTML(x, "palo")).join(""));
-    if (data.matched_rules && data.matched_rules.length) html += section("Palo Alto Security Rules & NATs", data.matched_rules.length, data.matched_rules.map(x => itemHTML(x, "palo")).join(""));
-    
-    if (data.all_entries_matches && data.all_entries_matches.length > 0) {
-        const allEntriesContent = data.all_entries_matches.map(x => itemHTML(x, "palo")).join("");
+    setSummary(data.summary || {});
+    let html = "";
+    const aws = data.aws_matches || [];
+    const sgs = data.attached_security_groups || [];
+    const objects = data.matched_objects || [];
+    const groups = data.matched_groups || [];
+    const rules = data.matched_rules || [];
+    const noisy = data.noisy_matches || data.all_entries_matches || [];
+
+    if (aws.length) html += section("Matching AWS Resources", aws.length, aws.map(x => itemHTML(x, "aws")).join(""));
+    if (sgs.length) html += section("Directly Attached Security Groups", sgs.length, sgs.map(x => itemHTML(x, "sg")).join(""));
+    if (objects.length) html += section("Palo Alto Address Objects / CIDR Roll-up", objects.length, objects.map(x => itemHTML(x, "palo")).join(""));
+    if (groups.length) html += section("Palo Alto Address Groups", groups.length, groups.map(x => itemHTML(x, "palo")).join(""));
+    if (rules.length) html += section("Palo Alto Security Rules & NATs", rules.length, rules.map(x => itemHTML(x, "palo")).join(""));
+
+    if (noisy.length > 0) {
+        const noiseContent = noisy.map(x => itemHTML(x, "palo")).join("");
         html += `
-            <div class="section" style="border-style: dashed;">
+            <div class="section" style="border-style:dashed; opacity:.92;">
                 <details>
-                    <summary style="padding: 16px; font-size: 14px; background: #2f3036;">
-                        📄 Parsed Full Collections (all_entries.json Files) — <b>${data.all_entries_matches.length} items hidden</b>
+                    <summary style="padding:16px; font-size:14px; background:#2f3036; cursor:pointer;">
+                        🗃️ Noisy / Aggregate JSON — <b>${noisy.length} exact matches hidden</b>
                     </summary>
-                    <div>
-                        ${allEntriesContent}
+                    <div style="padding-top:8px;">
+                        ${noiseContent}
                     </div>
                 </details>
-            </div>
-        `;
+            </div>`;
     }
 
     if (!html) html = `<div class="empty">No matching records found.</div>`;
@@ -1027,31 +1026,10 @@ async function investigate() {
     try {
         const res = await fetch("/api/investigate?q=" + encodeURIComponent(q));
         const data = await res.json();
-        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
         render(data);
     } catch (err) {
         document.getElementById("output").innerHTML = `<div class="empty" style="color:#f87171;">Error executing search query.</div>`;
     }
-}
-
-function renderPolicyContext(title, ctx) {
-    if (!ctx) return '';
-    let body = `<div class="item">`;
-    body += `<div class="meta"><b>Query:</b> ${esc(ctx.query || '')}</div>`;
-    if (ctx.networks && ctx.networks.length) {
-        body += `<div style="margin-top:8px"><b style="font-size:12px">Resolved networks</b><div>${ctx.networks.map(x => `<span class="rule-tag highlight">${esc(x)}</span>`).join(' ')}</div></div>`;
-    }
-    if (ctx.objects && ctx.objects.length) {
-        body += `<div style="margin-top:8px"><b style="font-size:12px">Objects</b><div>${ctx.objects.map(x => `<span class="rule-tag highlight">${esc(x.name || '')}</span>`).join(' ')}</div></div>`;
-    }
-    if (ctx.groups && ctx.groups.length) {
-        body += `<div style="margin-top:8px"><b style="font-size:12px">Groups</b><div>${ctx.groups.map(x => `<span class="rule-tag highlight">${esc(x.name || '')}</span>`).join(' ')}</div></div>`;
-    }
-    if (ctx.attached_security_groups && ctx.attached_security_groups.length) {
-        body += `<div style="margin-top:8px"><b style="font-size:12px">Direct AWS SGs</b><div>${ctx.attached_security_groups.map(x => `<span class="rule-tag highlight">${esc(x.name || x.data?.GroupId || '')}</span>`).join(' ')}</div></div>`;
-    }
-    body += `</div>`;
-    return section(title, (ctx.objects?.length || 0) + (ctx.groups?.length || 0), body);
 }
 
 async function executePolicyLookup() {
@@ -1063,46 +1041,36 @@ async function executePolicyLookup() {
         alert("Please enter at least a Source or Destination to search.");
         return;
     }
-
-    document.getElementById("policyLookupOutput").innerHTML = `<div class="empty">Resolving objects, groups, CIDRs and policy intersections...</div>`;
-
+    document.getElementById("policyLookupOutput").innerHTML = `<div class="empty">Querying firewall policies for matching intersections...</div>`;
     try {
         const params = new URLSearchParams();
         if (src) params.append("src", src);
         if (dst) params.append("dst", dst);
         if (port) params.append("port", port);
-
         const res = await fetch("/api/policy-lookup?" + params.toString());
         const data = await res.json();
-        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+        if (data.error) throw new Error(data.error);
 
-        let html = `<div class="summary">
-            <div class="card"><b>${data.summary?.objects || 0}</b><span>Objects</span></div>
-            <div class="card"><b>${data.summary?.groups || 0}</b><span>Groups</span></div>
-            <div class="card palo-card"><b>${data.summary?.rules || 0}</b><span>Matching Rules</span></div>
-            <div class="card palo-card"><b>${data.summary?.allow || 0}</b><span>Allow</span></div>
-            <div class="card"><b>${data.summary?.deny || 0}</b><span>Deny / Drop</span></div>
-            <div class="card"><b>${esc(data.timing?.total_ms ?? "—")} ms</b><span>Search Time</span></div>
-        </div>`;
+        const rules = data.matched_rules || data.rules || [];
+        const objects = data.matched_objects || [];
+        const groups = data.matched_groups || [];
+        const noisy = data.all_entries_matches || [];
+        let html = "";
 
-        html += renderPolicyContext("Resolved Source", data.source_context);
-        html += renderPolicyContext("Resolved Destination", data.destination_context);
+        if (objects.length) html += section("Resolved Palo Address Objects", objects.length, objects.map(x => itemHTML(x, "palo")).join(""));
+        if (groups.length) html += section("Resolved Palo Address Groups", groups.length, groups.map(x => itemHTML(x, "palo")).join(""));
+        if (rules.length) html += section("Matching Rules & Intersections", rules.length, rules.map(x => itemHTML(x, "palo")).join(""));
 
-        if (data.matched_objects?.length) {
-            html += section("Related Palo Alto Objects", data.matched_objects.length, data.matched_objects.map(x => itemHTML(x, "palo")).join(""));
+        if (noisy.length) {
+            html += `<div class="section" style="border-style:dashed; opacity:.92;"><details>
+                <summary style="padding:16px; background:#2f3036; cursor:pointer;">🗃️ Noisy / Aggregate JSON — <b>${noisy.length} exact matches hidden</b></summary>
+                <div>${noisy.map(x => itemHTML(x, "palo")).join("")}</div>
+            </details></div>`;
         }
-        if (data.matched_groups?.length) {
-            html += section("Related Palo Alto Groups / Members", data.matched_groups.length, data.matched_groups.map(x => itemHTML(x, "palo")).join(""));
-        }
-        if (data.matched_rules?.length) {
-            html += section("Matching Existing Firewall Rules", data.matched_rules.length, data.matched_rules.map(x => itemHTML(x, "palo")).join(""));
-        }
-        if (!data.matched_rules?.length) {
-            html += `<div class="empty">No existing PAN-OS rule intersects the resolved source/destination${port ? ` and service/port ${esc(port)}` : ''}.</div>`;
-        }
+        if (!html) html = `<div class="empty">No intersecting firewall rules found matching the given criteria.</div>`;
         document.getElementById("policyLookupOutput").innerHTML = html;
     } catch (err) {
-        document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">Policy lookup failed: ${esc(err.message || err)}</div>`;
+        document.getElementById("policyLookupOutput").innerHTML = `<div class="empty" style="color:#f87171;">${esc(err.message || "Error executing policy lookup query.")}</div>`;
     }
 }
 
@@ -1302,9 +1270,6 @@ function clearAll() {
 }
 
 document.getElementById("query").addEventListener("keydown", e => { if (e.key === "Enter") investigate(); });
-["lookupSource", "lookupDest", "lookupPort"].forEach(id => {
-    document.getElementById(id).addEventListener("keydown", e => { if (e.key === "Enter") executePolicyLookup(); });
-});
 
 async function loadInfo() {
     try {
