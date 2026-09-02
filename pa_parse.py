@@ -667,7 +667,7 @@ def parse_config(xml_file, output_root):
             file=sys.stderr,
         )
 
-        return False
+        return False, 0
 
     # ------------------------------------------------------------
     # Metadata
@@ -690,6 +690,7 @@ def parse_config(xml_file, output_root):
     # ------------------------------------------------------------
 
     extraction_counts = {}
+    total_extracted_resources = 0
 
     for object_type, patterns in OBJECT_TYPES.items():
 
@@ -710,6 +711,8 @@ def parse_config(xml_file, output_root):
         extraction_counts[
             object_type
         ] = len(objects)
+        
+        total_extracted_resources += len(objects)
 
         write_json(
             device_dir / f"{object_type}.json",
@@ -730,6 +733,8 @@ def parse_config(xml_file, output_root):
     extraction_counts[
         "security_profiles"
     ] = len(profiles)
+    
+    total_extracted_resources += len(profiles)
 
     write_json(
         device_dir / "security_profiles.json",
@@ -785,7 +790,7 @@ def parse_config(xml_file, output_root):
         f"Output: {device_dir}"
     )
 
-    return True
+    return True, total_extracted_resources
 
 
 # ================================================================
@@ -868,14 +873,18 @@ def main():
 
     successful = 0
     failed = 0
+    total_resources_found = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for xml_file in xml_files:
 
-        if parse_config(
+        success, res_count = parse_config(
             xml_file,
             output_dir,
-        ):
+        )
+        if success:
             successful += 1
+            total_resources_found += res_count
         else:
             failed += 1
 
@@ -886,6 +895,22 @@ def main():
     print(f"Successful: {successful}")
     print(f"Failed    : {failed}")
     print()
+
+    # Write automation results status file
+    automation_dir = Path("automation_results")
+    automation_dir.mkdir(parents=True, exist_ok=True)
+    
+    result_payload = {
+        "Name": "PAN-OS XML Parsing",
+        "Status": "Successful" if failed == 0 and successful > 0 else "Failed",
+        "Lastrun": timestamp,
+        "TotalResourcesFound": total_resources_found
+    }
+
+    result_file = automation_dir / "pa_parse_status.json"
+    with open(result_file, "w", encoding="utf-8") as rf:
+        json.dump(result_payload, rf, indent=2)
+    print(f"[+] Automation run status saved to {result_file}")
 
 
 if __name__ == "__main__":
