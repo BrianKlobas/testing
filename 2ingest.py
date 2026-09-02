@@ -10,7 +10,9 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterator
 
-from database import DEFAULT_DB_PATH, get_db, init_db, ip_hex, network_bounds
+from database import (
+    DEFAULT_DB_PATH, get_db, init_db, ip_hex, network_bounds, is_noisy_category
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_FW_DATA_ROOT = BASE_DIR / "parsed"
@@ -197,30 +199,48 @@ def _index_pan_relationships(cur: sqlite3.Cursor, rid: int, category: str, item:
 
 
 def index_record(cur: sqlite3.Cursor, rid: int, item: dict[str, Any], record_name: str, platform: str, category: str) -> tuple[int, int, int]:
+    """Index one record.
+
+    Aggregate/safety-net PAN JSON (all_entries/all_objects/etc.) is retained in
+    records so it can be shown in the expandable noise tray, but it is deliberately
+    excluded from network/ref/relationship indexes. Otherwise ancestor entries can
+    recursively contain thousands of IPs and swamp a normal /32 lookup.
+    """
     terms: set[tuple[str, str, str, str]] = set()
     refs: set[tuple[str, str, str]] = set()
     networks: set[tuple[int, str, str, str, str, str]] = set()
+    noisy = platform == "panos" and is_noisy_category(category)
+
     if record_name:
         terms.add((record_name, record_name.lower(), "name", "$.name"))
-    for json_path, key, raw in walk_scalars(item):
-        value = raw.strip()
-        if not value or len(value) > 4096:
-            continue
-        terms.add((value, value.lower(), "value", json_path))
-        ref_type = classify_ref(key, value)
-        if ref_type:
-            refs.add((ref_type, value, json_path))
-        bounds = network_bounds(value)
-        if bounds:
-            version, start, end = bounds
-            networks.add((version, ip_hex(start), ip_hex(end), value, _network_type(value), json_path))
+
+    if noisy:
+        # Keep only the record name/path searchable. Do not recursively index the
+        # nested aggregate payload; it remains available as raw JSON in records.data.
+        path_value = item.get("path") if isinstance(item, dict) else None
+        if path_value:
+            terms.add((str(path_value), str(path_value).lower(), "path", "$.path"))
+    else:
+        for json_path, key, raw in walk_scalars(item):
+            value = raw.strip()
+            if not value or len(value) > 4096:
+                continue
+            terms.add((value, value.lower(), "value", json_path))
+            ref_type = classify_ref(key, value)
+            if ref_type:
+                refs.add((ref_type, value, json_path))
+            bounds = network_bounds(value)
+            if bounds:
+                version, start, end = bounds
+                networks.add((version, ip_hex(start), ip_hex(end), value, _network_type(value), json_path))
+
     cur.executemany("INSERT INTO record_terms(record_id,term,term_lower,term_type,json_path) VALUES(?,?,?,?,?)",
                     [(rid, *x) for x in terms])
     cur.executemany("INSERT INTO record_refs(record_id,ref_type,ref_value,ref_value_lower,json_path) VALUES(?,?,?,?,?)",
                     [(rid, a, b, b.lower(), c) for a, b, c in refs])
     cur.executemany("INSERT INTO record_networks(record_id,version,start_hex,end_hex,value,network_type,json_path) VALUES(?,?,?,?,?,?,?)",
                     [(rid, *x) for x in networks])
-    if platform == "panos":
+    if platform == "panos" and not noisy:
         _index_pan_relationships(cur, rid, category, item)
     return len(terms), len(networks), len(refs)
 
