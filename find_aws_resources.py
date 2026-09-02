@@ -6,7 +6,7 @@ Reads organization json mapping, assumes cross-account roles, and exports
 comprehensive resource snapshots concurrently by parallelizing at the region-account level.
 
 Run:
-    python aws_infra_ingest.py --org-file org_topology.json --role-name OrganizationAccountAccessRole --output-dir ./aws_parsed
+    python aws_resource_collect.py --org-file org_topology.json --role-name OrganizationAccountAccessRole --output-dir ./aws_parsed
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import boto3
 from botocore.exceptions import ClientError
@@ -27,7 +28,7 @@ TARGET_REGIONS = [
 ]
 
 def flatten_accounts(node, account_list=None):
-    """Recursively extract all account records from the nested OU hierarchy."""[cite: 4]
+    """Recursively extract all account records from the nested OU hierarchy."""
     if account_list is None:
         account_list = []
     
@@ -41,7 +42,7 @@ def flatten_accounts(node, account_list=None):
     return account_list
 
 def assume_spoke_role(account_id: str, role_name: str) -> boto3.Session | None:
-    """Assume execution role in target spoke account via STS."""[cite: 4]
+    """Assume execution role in target spoke account via STS."""
     sts_client = boto3.client("sts")
     role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
     try:
@@ -61,13 +62,13 @@ def assume_spoke_role(account_id: str, role_name: str) -> boto3.Session | None:
         return None
 
 def serialize_datetime(obj):
-    """Helper to convert datetime fields for JSON serialization."""[cite: 4]
+    """Helper to convert datetime fields for JSON serialization."""
     if hasattr(obj, "isoformat"):
         return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
 
 def harvest_region_data(session: boto3.Session, region: str) -> dict:
-    """Collects target infrastructure assets and tagging metadata within a specific region."""[cite: 4]
+    """Collects target infrastructure assets and tagging metadata within a specific region."""
     data = {
         "vpcs": [],
         "subnets": [],
@@ -167,7 +168,7 @@ def harvest_region_data(session: boto3.Session, region: str) -> dict:
     return data
 
 def harvest_global_route53(session: boto3.Session) -> list:
-    """Route53 is a global service; capture hosted zones and record sets."""[cite: 4]
+    """Route53 is a global service; capture hosted zones and record sets."""
     zones_data = []
     try:
         r53 = session.client("route53")
@@ -190,7 +191,7 @@ def process_region_task(acc_id, acc_name, region, role_name, base_output_path):
     """Worker task handling a single region for a single account."""
     spoke_session = assume_spoke_role(acc_id, role_name)
     if not spoke_session:
-        return
+        return {}
 
     account_dir = base_output_path / f"{acc_id}_{acc_name}"
     regional_data = harvest_region_data(spoke_session, region)
@@ -203,12 +204,14 @@ def process_region_task(acc_id, acc_name, region, role_name, base_output_path):
         file_path = region_dir / f"{service_type}.json"
         with open(file_path, "w", encoding="utf-8") as sf:
             json.dump(items, sf, indent=2, default=serialize_datetime)
+            
+    return regional_data
 
 def process_global_task(acc_id, acc_name, role_name, base_output_path):
     """Worker task handling global Route53 for a single account."""
     spoke_session = assume_spoke_role(acc_id, role_name)
     if not spoke_session:
-        return
+        return []
 
     r53_data = harvest_global_route53(spoke_session)
     if r53_data:
@@ -217,52 +220,81 @@ def process_global_task(acc_id, acc_name, role_name, base_output_path):
         global_dir.mkdir(parents=True, exist_ok=True)
         with open(global_dir / "route53_zones_and_records.json", "w", encoding="utf-8") as rf:
             json.dump(r53_data, rf, indent=2, default=serialize_datetime)
+            
+    return r53_data
 
 def main():
     parser = argparse.ArgumentParser(description="Multithreaded AWS Infrastructure Ingester")
-    parser.add_argument("--org-file", default="org_topology.json", help="Path to organization JSON")[cite: 4]
-    parser.add_argument("--role-name", default="OrganizationAccountAccessRole", help="Cross-account role name")[cite: 4]
-    parser.add_argument("--output-dir", default="./aws_parsed", help="Root directory for output records")[cite: 4]
+    parser.add_argument("--org-file", default="org_topology.json", help="Output JSON filename")
+    parser.add_argument("--role-name", default="OrganizationAccountAccessRole", help="Cross-account role name")
+    parser.add_argument("--output-dir", default="./aws_parsed", help="Root directory for output records")
     parser.add_argument("--max-workers", type=int, default=50, help="Number of concurrent regional/global threads")
     args = parser.parse_args()
 
+    success = True
+    total_resources_found = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     if not os.path.exists(args.org_file):
-        print(f"[X] Organization file '{args.org_file}' not found. Run script 1 first.")[cite: 4]
-        return
-
-    with open(args.org_file, "r", encoding="utf-8") as f:
-        org_data = json.load(f)
-
-    accounts = flatten_accounts(org_data["Hierarchy"])
-    print(f"[*] Found {len(accounts)} active accounts. Launching fine-grained ThreadPoolExecutor with {args.max_workers} workers...")[cite: 4]
+        print(f"[X] Organization file '{args.org_file}' not found. Run script 1 first.")
+        success = False
+        accounts = []
+    else:
+        with open(args.org_file, "r", encoding="utf-8") as f:
+            org_data = json.load(f)
+        accounts = flatten_accounts(org_data["Hierarchy"])
+        print(f"[*] Found {len(accounts)} active accounts. Launching fine-grained ThreadPoolExecutor with {args.max_workers} workers...")
 
     base_output_path = Path(args.output_dir)
     base_output_path.mkdir(parents=True, exist_ok=True)
 
-    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-        futures = []
-        for acc in accounts:
-            acc_id = acc["Id"]
-            acc_name = acc["Name"].replace(" ", "_")
-            
-            # Submit individual tasks for each region across all accounts concurrently
-            for region in TARGET_REGIONS:
-                futures.append(
-                    executor.submit(process_region_task, acc_id, acc_name, region, args.role_name, base_output_path)
-                )
-            
-            # Submit global route53 task for the account
-            futures.append(
-                executor.submit(process_global_task, acc_id, acc_name, args.role_name, base_output_path)
-            )
+    if success and accounts:
+        with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+            future_to_task = {}
+            for acc in accounts:
+                acc_id = acc["Id"]
+                acc_name = acc["Name"].replace(" ", "_")
+                
+                # Submit individual tasks for each region across all accounts concurrently
+                for region in TARGET_REGIONS:
+                    f = executor.submit(process_region_task, acc_id, acc_name, region, args.role_name, base_output_path)
+                    future_to_task[f] = "region"
+                
+                # Submit global route53 task for the account
+                f = executor.submit(process_global_task, acc_id, acc_name, args.role_name, base_output_path)
+                future_to_task[f] = "global"
 
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"[X] Exception encountered in worker task: {e}")[cite: 4]
+            for future in as_completed(future_to_task):
+                task_type = future_to_task[future]
+                try:
+                    res = future.result()
+                    if task_type == "region" and isinstance(res, dict):
+                        for k, v in res.items():
+                            if isinstance(v, list):
+                                total_resources_found += len(v)
+                    elif task_type == "global" and isinstance(res, list):
+                        total_resources_found += len(res)
+                except Exception as e:
+                    print(f"[X] Exception encountered in worker task: {e}")
+                    success = False
 
-    print(f"\n[+] All fine-grained multithreaded account ingestion jobs complete! Artifacts saved under: {args.output_dir}")[cite: 4]
+        print(f"\n[+] All fine-grained multithreaded account ingestion jobs complete! Artifacts saved under: {args.output_dir}")
+
+    # Write automation results status file
+    automation_dir = Path("automation_results")
+    automation_dir.mkdir(parents=True, exist_ok=True)
+    
+    result_payload = {
+        "Name": "AWS Resource Collection",
+        "Status": "Successful" if success else "Failed",
+        "Lastrun": timestamp,
+        "TotalResourcesFound": total_resources_found
+    }
+
+    result_file = automation_dir / "aws_resource_collect_status.json"
+    with open(result_file, "w", encoding="utf-8") as rf:
+        json.dump(result_payload, rf, indent=2)
+    print(f"[+] Automation run status saved to {result_file}")
 
 if __name__ == "__main__":
     main()
