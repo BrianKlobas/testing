@@ -31,6 +31,7 @@ FW_DATA_ROOT = BASE_DIR / "parsed"
 AWS_DATA_ROOT = BASE_DIR / "aws_parsed"
 ORG_FILE_PATH = BASE_DIR / "org_topology.json"
 PAN_TOPOLOGY_PATH = BASE_DIR / "panorama_topology.json"
+AUTOMATION_RESULTS_ROOT = BASE_DIR / "automation_results"
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 
@@ -688,8 +689,37 @@ class InfrastructureDataSource:
         try:
             t0 = time.perf_counter()
             if info["family"] in (4, 6):
+                # Search PAN and AWS independently.  Do not let a large PAN network
+                # result set consume the shared search limit and hide an EC2/ENI.
                 pan_base = _base_search(conn, query, platform="panos", limit=limit)
                 aws_base = _base_search(conn, query, platform="aws", limit=limit)
+
+                # Some older AWS collector outputs have the endpoint IP in the raw
+                # JSON but not in the network index.  Use the exact indexed scalar
+                # term first, then a narrowly scoped JSON fallback for AWS resource
+                # records.  This keeps /32 lookups reliable without broad scans.
+                if not aws_base:
+                    target_ip = str(info.get("network").network_address) if info.get("network") else query.split("/", 1)[0].strip()
+                    rows = conn.execute("""
+                        SELECT DISTINCT r.id
+                        FROM record_terms rt JOIN records r ON r.id=rt.record_id
+                        WHERE r.platform='aws' AND rt.term_lower=?
+                        LIMIT ?
+                    """, (target_ip.lower(), limit)).fetchall()
+                    if rows:
+                        aws_base = fetch_records_by_ids(conn, [int(x[0]) for x in rows])
+                if not aws_base:
+                    target_ip = str(info.get("network").network_address) if info.get("network") else query.split("/", 1)[0].strip()
+                    rows = conn.execute("""
+                        SELECT r.id
+                        FROM records r
+                        WHERE r.platform='aws'
+                          AND (r.category LIKE '%instance%' OR r.category LIKE '%network_interface%' OR r.category LIKE '%eni%' OR r.category LIKE '%rds%' OR r.category LIKE '%load_balancer%')
+                          AND r.data LIKE ?
+                        LIMIT ?
+                    """, (f'%{target_ip}%', limit)).fetchall()
+                    if rows:
+                        aws_base = fetch_records_by_ids(conn, [int(x[0]) for x in rows])
                 base = _dedupe_rows(pan_base + aws_base)
             else:
                 base = _base_search(conn, query, limit=limit)
@@ -906,6 +936,36 @@ def api_info():return jsonify({"files":DATA.files_count(),"devices":DATA.devices
 def api_stats():return jsonify(DATA.get_stats())
 @app.route("/api/automation/status")
 def api_status():return jsonify({"aws_org_mtime":get_file_modified_time(ORG_FILE_PATH),"aws_data_mtime":get_latest_dir_mtime(AWS_DATA_ROOT),"pan_org_mtime":get_file_modified_time(PAN_TOPOLOGY_PATH),"pan_data_mtime":get_latest_dir_mtime(FW_DATA_ROOT)})
+@app.route("/api/automation/results")
+def api_automation_results():
+    results = []
+    root = AUTOMATION_RESULTS_ROOT
+    if not root.exists():
+        return jsonify({"results": [], "directory": str(root), "exists": False})
+    for path in sorted(root.glob("*.json"), key=lambda x: x.name.lower()):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                continue
+            def get_key(name, default=""):
+                if name in payload: return payload.get(name, default)
+                wanted = name.lower()
+                for k, v in payload.items():
+                    if str(k).lower() == wanted: return v
+                return default
+            reserved = {"name", "status", "lastrun"}
+            extras = {str(k): v for k, v in payload.items() if str(k).lower() not in reserved}
+            results.append({
+                "file": path.name,
+                "name": get_key("Name", path.stem),
+                "status": get_key("Status", "Unknown"),
+                "lastrun": get_key("Lastrun", ""),
+                "extra": extras,
+            })
+        except Exception as exc:
+            results.append({"file": path.name, "name": path.stem, "status": "ERROR", "lastrun": "", "extra": {"Error": str(exc)}})
+    return jsonify({"results": results, "directory": str(root), "exists": True})
+
 @app.route("/api/topology/aws")
 def api_top_aws():
     if not ORG_FILE_PATH.exists():return jsonify({"error":"AWS Organization Topology file not found."}),404
