@@ -958,6 +958,29 @@ function paloRuleBucket(x) {
 function paloExpandable(title,items,badgeClass='palo',open=false){
     if(!items.length)return ''; return `<details class="palo-type-block" ${open?'open':''}><summary>${esc(title)} <span class="count" style="float:right;">${items.length}</span></summary><div class="palo-type-body">${items.map(x=>itemHTML(x,badgeClass)).join('')}</div></details>`;
 }
+function awsBucket(x){
+    const c=String(x.type||x.category||'').toLowerCase().replace(/[-_]/g,' ');
+    if(c.includes('route53')||c.includes('hostedzone')||c.includes('route 53')) return 'Route53 Records';
+    if(c.includes('network interface')||c.includes(' eni')) return 'Network Interfaces';
+    if(c.includes('instance')||c.includes('ec2')) return 'EC2 Instances';
+    if(c.includes('rds')||c.includes('db instance')) return 'RDS Databases';
+    if(c.includes('load balancer')||c.includes('load_balancer')||c.includes('elb')) return 'Load Balancers';
+    if(c.includes('subnet')) return 'Subnets';
+    if(c.includes('vpc')) return 'VPCs';
+    if(c.includes('lambda')) return 'Lambda';
+    if(c.includes('nat')) return 'NAT Gateways';
+    if(c.includes('elastic ip')||c.includes('eip')) return 'Elastic IPs';
+    return String(x.type||x.category||'AWS Resources');
+}
+function renderAwsBuckets(items){
+    const buckets={};
+    items.forEach(x=>{const k=awsBucket(x);(buckets[k] ||= []).push(x)});
+    const preferred=['EC2 Instances','Network Interfaces','RDS Databases','Load Balancers','Route53 Records','Subnets','VPCs','Lambda','NAT Gateways','Elastic IPs'];
+    let html='<div class="palo-type-grid">';
+    preferred.forEach(k=>{if(buckets[k]?.length)html+=paloExpandable(k,buckets[k],'aws',false)});
+    Object.keys(buckets).filter(k=>!preferred.includes(k)).sort().forEach(k=>html+=paloExpandable(k,buckets[k],'aws',false));
+    return html+'</div>';
+}
 function renderPaloBuckets(objects,groups,rules){
     let html='<div class="palo-type-grid">'+paloExpandable('Address Objects / CIDR Roll-up',objects,'palo',true)+paloExpandable('Address Groups',groups,'palo',false);
     const buckets={}; rules.forEach(r=>{const k=paloRuleBucket(r);(buckets[k] ||= []).push(r)});
@@ -967,7 +990,8 @@ function renderPaloBuckets(objects,groups,rules){
 function render(data) {
     if(data.error){document.getElementById("output").innerHTML=`<div class="empty" style="color:#f87171;">${esc(data.error)}</div>`;return;} setSummary(data.summary||{}); let html="";
     const aws=data.aws_matches||[],sgs=data.attached_security_groups||[],objects=data.matched_objects||[],groups=data.matched_groups||[],rules=data.matched_rules||[],noisy=data.noisy_matches||data.all_entries_matches||[];
-    if(aws.length)html+=section("Matching AWS Resources",aws.length,aws.map(x=>itemHTML(x,"aws")).join("")); if(sgs.length)html+=section("Directly Attached Security Groups",sgs.length,sgs.map(x=>itemHTML(x,"sg")).join(""));
+    if(aws.length)html+=section("Matching AWS Resources",aws.length,renderAwsBuckets(aws));
+    if(sgs.length)html+=section("Directly Attached Security Groups",sgs.length,sgs.map(x=>itemHTML(x,"sg")).join(""));
     if(objects.length||groups.length||rules.length)html+=`<div class="section"><div class="section-title"><h2>Palo Alto Results</h2><span class="count">${objects.length+groups.length+rules.length}</span></div>${renderPaloBuckets(objects,groups,rules)}</div>`;
     if(noisy.length)html+=`<div class="section" style="border-style:dashed;opacity:.92;"><details><summary style="padding:16px;font-size:14px;background:#2f3036;cursor:pointer;">🗃️ Noisy / Aggregate JSON — <b>${noisy.length} exact matches hidden</b></summary><div style="padding-top:8px;">${noisy.map(x=>itemHTML(x,"palo")).join("")}</div></details></div>`;
     if(!html)html=`<div class="empty">No matching records found.</div>`; document.getElementById("output").innerHTML=html;
