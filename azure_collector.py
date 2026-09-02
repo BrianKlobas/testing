@@ -26,7 +26,7 @@ def collect_azure_inventory():
         success = False
 
     # Create local directory for outputs
-    output_dir = "azure_inventory"
+    output_dir = "azure_parsed"
     os.makedirs(output_dir, exist_ok=True)
 
     for sub in subscriptions:
