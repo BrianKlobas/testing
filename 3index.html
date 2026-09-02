@@ -704,7 +704,10 @@ function findKeyRecursively(obj, keys) {
 
 function renderRoute53Details(data, query) {
     const raw = data || {};
-    const recordSets = raw.ResourceRecordSets || raw.ResourceRecords || [];
+    // A search result may now contain a single Route53 RRset rather than the
+    // original hosted-zone object. Treat that object as one record set so
+    // Name / Type / TTL / Values render from the correct level.
+    const recordSets = raw.ResourceRecordSets || ((raw.Name || raw.Type || raw.TTL !== undefined) ? [raw] : (raw.ResourceRecords || []));
     const qLower = (query || "").toLowerCase();
 
     let matchedRecords = [];
@@ -916,13 +919,20 @@ function renderProperties(obj) {
 function itemHTML(x, badgeClass) {
     const rawData = x.data || {};
     const evalData = rawData.entry || rawData;
-    const displayName = x.name || evalData.name || evalData['@name'] || "Unnamed Record";
     const categoryLower = (x.type || "").toLowerCase();
+    const isSecurityGroup = categoryLower.includes("security_group") || categoryLower.includes("security-group") || rawData.IpPermissions !== undefined;
+    let displayName = x.name || evalData.name || evalData['@name'] || "Unnamed Record";
+    let displayNameHTML = esc(displayName);
+    if (isSecurityGroup) {
+        const groupName = rawData.GroupName || evalData.GroupName || x.group_name || "Unnamed Security Group";
+        const groupId = rawData.GroupId || evalData.GroupId || x.name || "";
+        displayNameHTML = `<div><b>${esc(groupName)}</b></div>${groupId ? `<div class="meta" style="margin-top:2px;">Group ID: <b>${esc(groupId)}</b></div>` : ""}`;
+    }
     
     let extraDetails = "";
     if (badgeClass === "palo") {
         extraDetails = renderPaloAltoDetails(x);
-    } else if (categoryLower.includes("security_group") || categoryLower.includes("security-group") || rawData.IpPermissions !== undefined) {
+    } else if (isSecurityGroup) {
         extraDetails = renderSecurityGroupDetails(rawData);
     } else if (categoryLower.includes("route53") || categoryLower.includes("r53") || categoryLower.includes("hostedzone") || rawData.ResourceRecordSets) {
         extraDetails = renderRoute53Details(rawData, currentSearchQuery);
@@ -933,7 +943,7 @@ function itemHTML(x, badgeClass) {
     return `
         <div class="item">
             <div class="item-head">
-                <div class="item-name">${esc(displayName)}</div>
+                <div class="item-name">${displayNameHTML}</div>
                 <div>
                     <span class="badge blue">${esc(x.device)}</span>
                     <span class="badge ${badgeClass}">${esc(x.type)}</span>
