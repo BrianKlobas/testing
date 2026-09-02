@@ -12,6 +12,23 @@ from typing import Any, Iterable
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "infra_intel.db"
 
+# Safety-net / aggregate JSON files are useful for forensic detail, but they must
+# never drive normal relationship expansion. They frequently duplicate the
+# authoritative object/rule JSON and can contain large nested configuration trees.
+NOISY_CATEGORY_TOKENS = (
+    "all_entries",
+    "all_objects",
+    "all_object_entries",
+    "all_objects_json",
+    "metadata",
+    "summary",
+)
+
+
+def is_noisy_category(category: str | None) -> bool:
+    value = str(category or "").replace("-", "_").lower()
+    return any(token in value for token in NOISY_CATEGORY_TOKENS)
+
 
 def parse_ip_network(value: str | None):
     if not value:
@@ -185,17 +202,17 @@ def init_db(db_file: Path | str | None = None, reset: bool = False) -> None:
             CREATE INDEX IF NOT EXISTS idx_records_platform_category ON records(platform,category);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
-                name, data, content='records', content_rowid='id'
+                name, content='records', content_rowid='id'
             );
             CREATE TRIGGER IF NOT EXISTS records_ai AFTER INSERT ON records BEGIN
-                INSERT INTO records_fts(rowid,name,data) VALUES(new.id,new.name,new.data);
+                INSERT INTO records_fts(rowid,name) VALUES(new.id,new.name);
             END;
             CREATE TRIGGER IF NOT EXISTS records_ad AFTER DELETE ON records BEGIN
-                INSERT INTO records_fts(records_fts,rowid,name,data) VALUES('delete',old.id,old.name,old.data);
+                INSERT INTO records_fts(records_fts,rowid,name) VALUES('delete',old.id,old.name);
             END;
             CREATE TRIGGER IF NOT EXISTS records_au AFTER UPDATE ON records BEGIN
-                INSERT INTO records_fts(records_fts,rowid,name,data) VALUES('delete',old.id,old.name,old.data);
-                INSERT INTO records_fts(rowid,name,data) VALUES(new.id,new.name,new.data);
+                INSERT INTO records_fts(records_fts,rowid,name) VALUES('delete',old.id,old.name);
+                INSERT INTO records_fts(rowid,name) VALUES(new.id,new.name);
             END;
 
             CREATE TABLE IF NOT EXISTS record_terms (
@@ -279,7 +296,20 @@ def init_db(db_file: Path | str | None = None, reset: bool = False) -> None:
         conn.close()
 
 
-def find_network_record_ids(conn: sqlite3.Connection, value: str, *, platform: str | None = None, limit: int = 2000) -> list[int]:
+def find_network_record_ids(
+    conn: sqlite3.Connection,
+    value: str,
+    *,
+    platform: str | None = None,
+    limit: int = 2000,
+    include_noisy: bool = True,
+) -> list[int]:
+    """Return records whose indexed network/range fully contains *value*.
+
+    This is intentionally containment, not generic overlap. Searching 10.1.2.3/32
+    therefore finds 10.1.2.3/32, 10.1.2.0/24, 10.1.0.0/16, etc., but does not
+    explode into unrelated sibling networks.
+    """
     bounds = network_bounds(value)
     if not bounds:
         return []
@@ -290,10 +320,15 @@ def find_network_record_ids(conn: sqlite3.Connection, value: str, *, platform: s
         JOIN records r ON r.id=rn.record_id
         WHERE rn.version=? AND rn.start_hex<=? AND rn.end_hex>=?
     """
-    params: list[Any] = [version, ip_hex(end), ip_hex(start)]
+    params: list[Any] = [version, ip_hex(start), ip_hex(end)]
     if platform:
         sql += " AND r.platform=?"
         params.append(platform)
+    if not include_noisy:
+        sql += " AND lower(replace(r.category,'-','_')) NOT LIKE '%all_entries%'"
+        sql += " AND lower(replace(r.category,'-','_')) NOT LIKE '%all_objects%'"
+        sql += " AND lower(replace(r.category,'-','_')) NOT LIKE '%all_object_entries%'"
+        sql += " AND lower(replace(r.category,'-','_')) NOT IN ('metadata','summary')"
     sql += " LIMIT ?"
     params.append(limit)
     return [int(r[0]) for r in conn.execute(sql, params).fetchall()]
