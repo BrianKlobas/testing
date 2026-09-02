@@ -276,9 +276,24 @@ def _expand_groups_sql(conn:sqlite3.Connection, names:set[str], limit:int=3000) 
     for _ in range(20):
         if not all_names: break
         ph=','.join('?'*len(all_names))
-        found=conn.execute(f"""SELECT DISTINCT g.id,g.device_id,g.platform,g.category,g.filename,g.name,g.data
-            FROM pan_group_members gm JOIN records g ON g.id=gm.group_record_id
-            WHERE g.platform='panos' AND gm.member_name_lower IN ({ph}) LIMIT ?""",[*all_names,limit]).fetchall()
+        found = conn.execute(
+            f"""SELECT DISTINCT
+                    g.id,
+                    g.device_id,
+                    d.name AS device,
+                    g.platform,
+                    g.category,
+                    g.filename,
+                    g.name,
+                    g.data
+                FROM pan_group_members gm
+                JOIN records g ON g.id=gm.group_record_id
+                JOIN devices d ON d.id=g.device_id
+                WHERE g.platform='panos'
+                  AND gm.member_name_lower IN ({ph})
+                LIMIT ?""",
+            [*all_names, limit]
+        ).fetchall()
         new=set()
         for r in found:
             rid=int(r["id"]); n=(r["name"] or "").lower()
