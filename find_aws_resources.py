@@ -28,16 +28,18 @@ TARGET_REGIONS = [
 ]
 
 def flatten_accounts(node, account_list=None):
-    """Recursively extract all account records from the nested OU hierarchy."""
+    """Recursively extract all account records from the nested OU hierarchy using 'OUs'."""
     if account_list is None:
         account_list = []
     
     for acc in node.get("Accounts", []):
-        if acc.get("Status") == "ACTIVE" or acc.get("State") == "ACTIVE":
+        # Handle both legacy 'Status' and updated 'State' properties safely
+        state = acc.get("Status") or acc.get("State")
+        if state == "ACTIVE":
             account_list.append(acc)
             
     for ou in node.get("OUs", []):
-        flatten_accounts(ou["Children"], account_list)
+        flatten_accounts(ou, account_list)
         
     return account_list
 
@@ -225,7 +227,7 @@ def process_global_task(acc_id, acc_name, role_name, base_output_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Multithreaded AWS Infrastructure Ingester")
-    parser.add_argument("--org-file", default="org_topology.json", help="Output JSON filename")
+    parser.add_argument("--org-file", default="org_topology.json", help="Path to organization JSON")
     parser.add_argument("--role-name", default="OrganizationAccountAccessRole", help="Cross-account role name")
     parser.add_argument("--output-dir", default="./aws_parsed", help="Root directory for output records")
     parser.add_argument("--max-workers", type=int, default=50, help="Number of concurrent regional/global threads")
@@ -255,14 +257,12 @@ def main():
                 acc_id = acc["Id"]
                 acc_name = acc["Name"].replace(" ", "_")
                 
-                # Submit individual tasks for each region across all accounts concurrently
                 for region in TARGET_REGIONS:
                     f = executor.submit(process_region_task, acc_id, acc_name, region, args.role_name, base_output_path)
                     future_to_task[f] = "region"
                 
-                # Submit global route53 task for the account
                 f = executor.submit(process_global_task, acc_id, acc_name, args.role_name, base_output_path)
-                future_to_task[f] = "global"
+                    future_to_task[f] = "global"
 
             for future in as_completed(future_to_task):
                 task_type = future_to_task[future]
