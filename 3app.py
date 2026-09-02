@@ -644,6 +644,103 @@ def _service_hit(conn: sqlite3.Connection, refs: list[str], port: str, cache: di
     return any(one(x) for x in refs)
 
 
+def _route53_query_matches(record: dict[str, Any], query: str) -> bool:
+    """Return True only when this individual Route53 record matches the query."""
+    q = str(query or "").strip()
+    if not q:
+        return False
+    qlow = q.lower()
+    values: list[str] = []
+    name = record.get("Name") or record.get("name")
+    if name:
+        values.append(str(name))
+    rtype = record.get("Type") or record.get("type")
+    if rtype:
+        values.append(str(rtype))
+    for rr in record.get("ResourceRecords") or []:
+        if isinstance(rr, dict) and rr.get("Value") is not None:
+            values.append(str(rr["Value"]))
+        elif rr is not None:
+            values.append(str(rr))
+    alias = record.get("AliasTarget") or record.get("alias_target")
+    if isinstance(alias, dict):
+        for k in ("DNSName", "HostedZoneId", "EvaluateTargetHealth"):
+            if alias.get(k) is not None:
+                values.append(str(alias[k]))
+    elif alias:
+        values.append(str(alias))
+    if record.get("Value") is not None:
+        values.append(str(record["Value"]))
+
+    info = classify_ip_search(q)
+    if info.get("family") in (4, 6):
+        qb = network_bounds(q)
+        if not qb:
+            return False
+        for value in values:
+            vb = network_bounds(value)
+            if vb and vb[0] == qb[0] and vb[1] <= qb[1] and vb[2] >= qb[2]:
+                return True
+        return False
+    return any(qlow in value.lower() for value in values)
+
+
+def _route53_child_records(row: sqlite3.Row, query: str) -> list[dict[str, Any]]:
+    """Convert a collector's hosted-zone blob into only the matching RRsets."""
+    data = _safe_json(row["data"])
+    record_sets = data.get("ResourceRecordSets") if isinstance(data, dict) else None
+    if not isinstance(record_sets, list):
+        return []
+    zone_name = data.get("Name") or data.get("name") or ""
+    zone_id = data.get("Id") or data.get("HostedZoneId") or ""
+    out = []
+    for rr in record_sets:
+        if not isinstance(rr, dict) or not _route53_query_matches(rr, query):
+            continue
+        child = dict(rr)
+        child["HostedZoneName"] = zone_name
+        child["HostedZoneId"] = zone_id
+        out.append({
+            "record_id": f'{int(row["id"])}:{str(rr.get("Name") or "")}:{str(rr.get("Type") or "")}',
+            "device": row["device"],
+            "platform": "aws",
+            "type": "route53_record",
+            "category": "route53_record",
+            "file": row["filename"],
+            "name": str(rr.get("Name") or zone_name or "Route53 Record"),
+            "data": child,
+            "match_reason": "matched_route53_record",
+            "matched_value": query,
+        })
+    return out
+
+
+def _expand_route53_matches(conn: sqlite3.Connection, records: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        if rec.get("platform") != "aws":
+            out.append(rec)
+            continue
+        cat = _cat(rec.get("category", ""))
+        data = rec.get("data") if isinstance(rec.get("data"), dict) else {}
+        if "route53" not in cat and "hostedzone" not in cat and "resource_record_sets" not in data:
+            out.append(rec)
+            continue
+        # Find the original zone row and emit only matching RRsets.
+        rid = str(rec.get("record_id", ""))
+        try:
+            base_id = int(rid.split(":", 1)[0])
+        except (TypeError, ValueError):
+            base_id = None
+        if base_id is None:
+            continue
+        rows = conn.execute("""SELECT r.id,r.device_id,d.name AS device,r.platform,r.category,r.filename,r.name,r.data
+                              FROM records r JOIN devices d ON d.id=r.device_id WHERE r.id=?""", (base_id,)).fetchall()
+        if rows:
+            out.extend(_route53_child_records(rows[0], query))
+    return out
+
+
 class InfrastructureDataSource:
     def __init__(self, db_file: Path | None = None):
         self._db_file = db_file
@@ -699,7 +796,7 @@ class InfrastructureDataSource:
                 # term first, then a narrowly scoped JSON fallback for AWS resource
                 # records.  This keeps /32 lookups reliable without broad scans.
                 if not aws_base:
-                    target_ip = str(info.get("network").network_address) if info.get("network") else query.split("/", 1)[0].strip()
+                    target_ip = str(network_bounds(query)[1]) if network_bounds(query) else query.split("/", 1)[0].strip()
                     rows = conn.execute("""
                         SELECT DISTINCT r.id
                         FROM record_terms rt JOIN records r ON r.id=rt.record_id
@@ -709,7 +806,7 @@ class InfrastructureDataSource:
                     if rows:
                         aws_base = fetch_records_by_ids(conn, [int(x[0]) for x in rows])
                 if not aws_base:
-                    target_ip = str(info.get("network").network_address) if info.get("network") else query.split("/", 1)[0].strip()
+                    target_ip = str(network_bounds(query)[1]) if network_bounds(query) else query.split("/", 1)[0].strip()
                     rows = conn.execute("""
                         SELECT r.id
                         FROM records r
@@ -769,6 +866,7 @@ class InfrastructureDataSource:
             noisy = _noisy_search(conn, query, noisy_names, limit=50)
             timings["noisy_exact_lookup_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
+            aws = _expand_route53_matches(conn, aws, query)
             aws = _dedupe(aws)
             sgs = _dedupe(sgs)
             # A direct SG definition belongs in the SG section, not duplicated in AWS.
