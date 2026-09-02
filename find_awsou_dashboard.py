@@ -6,12 +6,14 @@ Iterates through the AWS Organization structure, finding all OUs,
 parents, and active member accounts, saving output as a structured JSON.
 
 Run:
-    python aws_org_discover.py --output org_topology.json
+    python find_awsou_dashboard.py --output org_topology.json
 """
 
 from __future__ import annotations
 import argparse
 import json
+from datetime import datetime
+from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
@@ -60,10 +62,21 @@ def get_ou_hierarchy(client, parent_id, parent_path="Root"):
 
     return node
 
+def count_all_accounts(node):
+    """Recursively count all active/total accounts found in the hierarchy tree."""
+    count = len(node.get("Accounts", []))
+    for ou in node.get("OUs", []):
+        count += count_all_accounts(ou)
+    return count
+
 def main():
     parser = argparse.ArgumentParser(description="Export AWS Org Structure to JSON")
     parser.add_argument("--output", default="org_topology.json", help="Output JSON filename")
     args = parser.parse_args()
+
+    success = True
+    accounts_found_count = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     client = boto3.client("organizations")
 
@@ -72,34 +85,58 @@ def main():
         org_desc = client.describe_organization()["Organization"]
     except ClientError as e:
         print(f"[X] Failed to access AWS Organizations. Ensure you are running from the Management Account. Error: {e}")
-        return
+        success = False
+        org_desc = {}
 
-    # Find Root ID
-    roots = client.list_roots()["Roots"]
-    root_id = roots[0]["Id"]
-    root_name = roots[0]["Name"]
+    if success:
+        try:
+            # Find Root ID
+            roots = client.list_roots()["Roots"]
+            root_id = roots[0]["Id"]
+            root_name = roots[0]["Name"]
 
-    print(f"[*] Building Organization Tree from Root: {root_name} ({root_id})...")
+            print(f"[*] Building Organization Tree from Root: {root_name} ({root_id})...")
+            
+            # Process Root node hierarchy
+            root_hierarchy = get_ou_hierarchy(client, root_id, parent_path=root_name)
+            root_hierarchy["Id"] = root_id
+            root_hierarchy["Name"] = root_name
+            root_hierarchy["Path"] = root_name
+
+            accounts_found_count = count_all_accounts(root_hierarchy)
+
+            org_tree = {
+                "OrganizationId": org_desc.get("Id"),
+                "MasterAccountArn": org_desc.get("MasterAccountArn"),
+                "MasterAccountId": org_desc.get("MasterAccountId"),
+                "RootId": root_id,
+                "RootName": root_name,
+                "Hierarchy": root_hierarchy
+            }
+
+            with open(args.output, "w", encoding="utf-8") as f:
+                json.dump(org_tree, f, indent=2, default=str)
+
+            print(f"[+] Organization topology successfully written to {args.output}")
+        except Exception as e:
+            print(f"[X] Error occurred during organization discovery: {e}")
+            success = False
+
+    # Write automation results status file
+    automation_dir = Path("automation_results")
+    automation_dir.mkdir(parents=True, exist_ok=True)
     
-    # Process Root node hierarchy
-    root_hierarchy = get_ou_hierarchy(client, root_id, parent_path=root_name)
-    root_hierarchy["Id"] = root_id
-    root_hierarchy["Name"] = root_name
-    root_hierarchy["Path"] = root_name
-
-    org_tree = {
-        "OrganizationId": org_desc["Id"],
-        "MasterAccountArn": org_desc["MasterAccountArn"],
-        "MasterAccountId": org_desc["MasterAccountId"],
-        "RootId": root_id,
-        "RootName": root_name,
-        "Hierarchy": root_hierarchy
+    result_payload = {
+        "Name": "AWS Organization Discovery",
+        "Status": "Successful" if success else "Failed",
+        "Lastrun": timestamp,
+        "AccountsFound": accounts_found_count
     }
 
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(org_tree, f, indent=2, default=str)
-
-    print(f"[+] Organization topology successfully written to {args.output}")
+    result_file = automation_dir / "find_awsou_dashboard_status.json"
+    with open(result_file, "w", encoding="utf-8") as rf:
+        json.dump(result_payload, rf, indent=2)
+    print(f"[+] Automation run status saved to {result_file}")
 
 if __name__ == "__main__":
     main()
