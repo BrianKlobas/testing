@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
-"""Flask application for Infrastructure Intelligence.
+"""Infrastructure Intelligence Flask application.
 
-IMPORTANT: this module does NOT ingest source JSON. Run ingest.py separately
-when the source JSON changes, then start this app for fast development/testing:
-    python app.py
+The app never ingests JSON. Run ingest.py when source JSON changes.
+This version is optimized for millions of indexed terms/references and hundreds
+of thousands of networks by resolving Palo relationships with SQL indexes.
 """
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
+import sqlite3
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from flask import Flask, jsonify, render_template, request
 
 from database import (
-    DEFAULT_DB_PATH,
-    extract_direct_attached_sg_ids,
-    extract_ip_or_cidr,
-    get_db,
-    get_file_modified_time,
-    get_latest_dir_mtime,
-    sqlite_ip_contains,
-    classify_ip_search,
-    value_matches_network_or_range,
+    DEFAULT_DB_PATH, classify_ip_search, extract_direct_attached_sg_ids,
+    fetch_records_by_ids, find_network_record_ids, get_db,
+    get_file_modified_time, get_latest_dir_mtime, network_bounds,
+    value_matches_network_or_range, is_noisy_category,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -33,112 +31,714 @@ FW_DATA_ROOT = BASE_DIR / "parsed"
 AWS_DATA_ROOT = BASE_DIR / "aws_parsed"
 ORG_FILE_PATH = BASE_DIR / "org_topology.json"
 PAN_TOPOLOGY_PATH = BASE_DIR / "panorama_topology.json"
-
+AUTOMATION_RESULTS_ROOT = BASE_DIR / "automation_results"
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 
-def _extract_values(obj: Any) -> list[str]:
-    if obj is None:
-        return []
-    if isinstance(obj, (str, int, float, bool)):
-        return [str(obj)]
-    if isinstance(obj, list):
-        values: list[str] = []
-        for item in obj:
-            values.extend(_extract_values(item))
-        return values
-    if isinstance(obj, dict):
-        results: list[str] = []
-        if obj.get("member") is not None:
-            results.extend(_extract_values(obj["member"]))
-        if obj.get("entry") is not None:
-            results.extend(_extract_values(obj["entry"]))
-        if obj.get("#text") is not None:
-            results.append(str(obj["#text"]))
-        if isinstance(obj.get("name"), str):
-            results.append(obj["name"])
-        if obj.get("@name") is not None:
-            results.append(str(obj["@name"]))
+def _safe_json(raw: str) -> Any:
+    try: return json.loads(raw)
+    except Exception: return {}
 
-        if results:
-            return results
 
-        for key, value in obj.items():
-            if not key.startswith("@"):
-                results.extend(_extract_values(value))
-        return results
+def _record(row: Any, *, reason: str | None = None, matched_value: str | None = None) -> dict[str, Any]:
+    """Normalize a DB row and tolerate helper queries that omit display columns."""
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    def rv(key: str, default: Any = "") -> Any:
+        try:
+            return row[key] if not keys or key in keys else default
+        except (KeyError, IndexError, TypeError):
+            return default
+    rec = {
+        "record_id": int(rv("id", -1)),
+        "device": rv("device", f"device_id:{rv('device_id','?')}"),
+        "platform": rv("platform", ""),
+        "type": rv("category", ""),
+        "category": rv("category", ""),
+        "file": rv("filename", ""),
+        "name": rv("name", "") or "",
+        "data": _safe_json(rv("data", "{}")),
+    }
+    if reason:
+        rec["match_reason"] = reason
+    if matched_value:
+        rec["matched_value"] = matched_value
+    return rec
+
+
+def _dedupe(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate semantically identical display records, not just DB row IDs."""
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for x in records:
+        data = x.get("data") if isinstance(x.get("data"), dict) else {}
+        path = str(data.get("path") or "").lower()
+        key = (
+            str(x.get("platform") or "").lower(),
+            str(x.get("device") or "").lower(),
+            str(x.get("category") or x.get("type") or "").lower(),
+            str(x.get("name") or "").lower(),
+            path,
+        )
+        # unnamed records need record_id so unrelated AWS blobs are not collapsed
+        if not key[3] and not path:
+            key = (*key, int(x.get("record_id", -1)))
+        if key not in seen:
+            seen.add(key)
+            out.append(x)
+    return out
+
+
+def _cat(category: str) -> str: return str(category or "").replace("-", "_").lower()
+
+
+def _pan_payload(data: Any) -> dict[str, Any]:
+    if isinstance(data, dict):
+        for k in ("object", "rule", "profile"):
+            if isinstance(data.get(k), dict): return data[k]
+        if isinstance(data.get("entry"), dict): return data["entry"]
+        return data
+    return {}
+
+
+def _flatten(v: Any) -> list[str]:
+    if v is None: return []
+    if isinstance(v, (str, int, float, bool)): return [str(v)]
+    if isinstance(v, list):
+        o=[]
+        for x in v: o.extend(_flatten(x))
+        return o
+    if isinstance(v, dict):
+        if "member" in v: return _flatten(v["member"])
+        o=[]
+        for x in v.values(): o.extend(_flatten(x))
+        return o
     return []
 
 
-def _find_key_recursively(obj: Any, keys: list[str]) -> Any:
-    if not isinstance(obj, dict):
-        if isinstance(obj, list):
-            for item in obj:
-                found = _find_key_recursively(item, keys)
-                if found is not None:
-                    return found
-        return None
-
-    for key in keys:
-        if key in obj:
-            return obj[key]
-
-    for value in obj.values():
-        if isinstance(value, (dict, list)):
-            found = _find_key_recursively(value, keys)
-            if found is not None:
-                return found
+def _find_key(obj: Any, names: set[str]) -> Any:
+    if isinstance(obj, dict):
+        for k,v in obj.items():
+            if str(k).lower() in names: return v
+        for v in obj.values():
+            x=_find_key(v,names)
+            if x is not None: return x
+    elif isinstance(obj,list):
+        for v in obj:
+            x=_find_key(v,names)
+            if x is not None: return x
     return None
 
 
-def _clean_fts_query(query: str) -> str:
-    tokens = re.findall(r"[a-zA-Z0-9_\-\.]+", query)
-    if not tokens:
-        return ""
-    return " ".join(f"{t}*" for t in tokens)
+def _pan_role(category: str, data: Any) -> str:
+    c = _cat(category)
+    if is_noisy_category(c):
+        return "raw"
+    if any(x in c for x in ("rule","policy","nat","pbf","qos","decryption","override","authentication")):
+        return "rule"
+    if "service_group" in c:
+        return "service_group"
+    if "service" in c and "group" not in c:
+        return "service"
+    if "address_group" in c:
+        return "group"
+    if "address" in c:
+        return "object"
+    p = _pan_payload(data)
+    keys = {str(k).lower() for k in p}
+    if "action" in keys and ("source" in keys or "destination" in keys):
+        return "rule"
+    if "static" in keys or "member" in keys:
+        return "group"
+    return "other"
 
-def _classify_panos_record(row: Any, item_payload: Any, output: dict[str, Any]) -> None:
-    filename = str(row["filename"]).lower()
-    category = str(row["category"]).lower()
-    record = {
-        "device": row["device"],
-        "type": row["category"],
-        "file": row["filename"],
-        "name": row["name"],
-        "data": item_payload,
-    }
 
-    if "all_entries" in filename or "all_entries" in category:
-        output["all_entries_matches"].append(record)
-    elif "rule" in category or "policy" in category or "nat" in category:
-        output["matched_rules"].append(record)
+def _is_raw(row: Any) -> bool:
+    return is_noisy_category(row["category"])
+
+
+def _is_sg(category: str, item: dict[str,Any]) -> bool:
+    c=_cat(category)
+    return "security_group" in c and ("GroupId" in item or "IpPermissions" in item or "IpPermissionsEgress" in item)
+
+
+def _rule_action(rec: dict[str,Any]) -> str:
+    vals=_flatten(_find_key(_pan_payload(rec.get("data",{})),{"action"}))
+    return vals[0] if vals else "unknown"
+
+
+def _rule_field(rec: dict[str,Any], field: str) -> list[str]:
+    return [x for x in _flatten(_find_key(_pan_payload(rec.get("data",{})),{field})) if x]
+
+
+def _group_members(rec: dict[str,Any]) -> list[str]:
+    return _rule_field(rec,"static") or _rule_field(rec,"member") or _rule_field(rec,"members")
+
+
+def _is_compute(category: str) -> bool:
+    c=_cat(category)
+    return any(x in c for x in ("instance","ec2","network_interface","eni","load_balancer","rds","db_instance","lambda"))
+
+
+def _network_values(conn: sqlite3.Connection, ids: Iterable[int]) -> list[str]:
+    ids=list(dict.fromkeys(int(x) for x in ids))
+    if not ids:return []
+    ph=",".join("?"*len(ids))
+    return [str(r[0]) for r in conn.execute(f"SELECT DISTINCT value FROM record_networks WHERE record_id IN ({ph})",ids)]
+
+
+def _add_ctx(ctx:list[dict[str,Any]], seen:set[str], value:str, source:str, name:str=""):
+    if not network_bounds(value): return
+    k=value.lower()
+    if k not in seen:
+        seen.add(k); ctx.append({"value":value,"source":source,"name":name})
+
+
+def _normal_record_predicate(alias: str = "r") -> str:
+    c = f"lower(replace({alias}.category,'-','_'))"
+    return (f"{c} NOT LIKE '%all_entries%' AND {c} NOT LIKE '%all_objects%' "
+            f"AND {c} NOT LIKE '%all_object_entries%' AND {c} NOT IN ('metadata','summary')")
+
+
+def _find_pan_network_entity_ids(conn: sqlite3.Connection, value: str, limit: int = 500) -> list[int]:
+    """Find real PAN address objects/groups whose network fully contains value."""
+    b = network_bounds(value)
+    if not b:
+        return []
+    ver, start, end = b
+    pred = _normal_record_predicate("r")
+    sql = f"""
+        SELECT DISTINCT rn.record_id
+        FROM record_networks rn
+        JOIN records r ON r.id=rn.record_id
+        WHERE r.platform='panos'
+          AND rn.version=? AND rn.start_hex<=? AND rn.end_hex>=?
+          AND {pred}
+          AND lower(replace(r.category,'-','_')) LIKE '%address%'
+        LIMIT ?
+    """
+    return [int(r[0]) for r in conn.execute(sql, (ver, f"{int(start):032x}", f"{int(end):032x}", limit))]
+
+
+def _noisy_search(
+    conn: sqlite3.Connection,
+    query: str,
+    related_names: Iterable[str] = (),
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Small tray for aggregate PAN JSON; never drives relationships.
+
+    Aggregate records are selected only by exact query/name matches or by names of
+    authoritative objects/groups/rules already found. This preserves the duplicate
+    raw evidence without recursively indexing or expanding giant all_entries trees.
+    """
+    q = query.strip().lower()
+    names = {str(x).strip().lower() for x in related_names if str(x).strip()}
+    if q:
+        names.add(q)
+    if not names:
+        return []
+    pred = f"NOT ({_normal_record_predicate('r')})"
+    ids: list[int] = []
+    for batch_start in range(0, len(names), 100):
+        batch = list(names)[batch_start:batch_start + 100]
+        ph = ','.join('?' * len(batch))
+        ids.extend(int(r[0]) for r in conn.execute(
+            f"SELECT id FROM records r WHERE r.platform='panos' AND {pred} AND r.name_lower IN ({ph}) LIMIT ?",
+            [*batch, max(0, limit-len(ids))],
+        ))
+        if len(ids) >= limit:
+            break
+    # Old databases may still have scalar terms for all_entries. Exact-term only is
+    # safe; never use network containment or FTS for noisy records.
+    if q and len(ids) < limit:
+        ids.extend(int(r[0]) for r in conn.execute(
+            f"""SELECT DISTINCT rt.record_id FROM record_terms rt
+                JOIN records r ON r.id=rt.record_id
+                WHERE r.platform='panos' AND {pred} AND rt.term_lower=? LIMIT ?""",
+            (q, limit-len(ids)),
+        ))
+    return _dedupe([_record(r, reason="noisy_aggregate_duplicate") for r in fetch_records_by_ids(conn, ids)])[:limit]
+
+
+def _pan_seed_networks(query: str, ctx: list[dict[str, Any]]) -> list[str]:
+    """Networks that are allowed to drive PAN roll-up.
+
+    If the user typed an IP/CIDR, that exact query is the only roll-up seed. AWS
+    subnet/VPC context is display context, not a new search target. For non-IP
+    searches (instance/ENI/DNS/object name), endpoint/resource IPs become seeds.
+    """
+    if network_bounds(query):
+        return [query]
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in ctx:
+        if c.get("source") not in {"aws_resource", "palo_object"}:
+            continue
+        v = str(c.get("value") or "")
+        if network_bounds(v) and v.lower() not in seen:
+            seen.add(v.lower())
+            out.append(v)
+    return out[:100]
+
+
+def _base_search(conn: sqlite3.Connection, query: str, platform: str | None = None, limit: int = 300) -> list[sqlite3.Row]:
+    info = classify_ip_search(query)
+    ids: list[int] = []
+    pred = _normal_record_predicate("r")
+    if info["family"] in (4, 6):
+        ids = find_network_record_ids(conn, query, platform=platform, limit=max(limit * 4, 1000), include_noisy=False)
     else:
-        output["matched_objects"].append(record)
+        q = query.strip().lower()
+        sql = f"SELECT DISTINCT r.id FROM records r WHERE {pred} AND r.name_lower=?"
+        p: list[Any] = [q]
+        if platform:
+            sql += " AND r.platform=?"; p.append(platform)
+        sql += " LIMIT ?"; p.append(limit)
+        ids += [int(r[0]) for r in conn.execute(sql, p)]
+
+        sql = f"""SELECT DISTINCT rr.record_id FROM record_refs rr
+                  JOIN records r ON r.id=rr.record_id
+                  WHERE {pred} AND rr.ref_value_lower=?"""
+        p = [q]
+        if platform:
+            sql += " AND r.platform=?"; p.append(platform)
+        sql += " LIMIT ?"; p.append(limit)
+        ids += [int(r[0]) for r in conn.execute(sql, p)]
+
+        if len(set(ids)) < limit:
+            sql = f"""SELECT DISTINCT rt.record_id FROM record_terms rt
+                      JOIN records r ON r.id=rt.record_id
+                      WHERE {pred} AND rt.term_lower=?"""
+            p = [q]
+            if platform:
+                sql += " AND r.platform=?"; p.append(platform)
+            sql += " LIMIT ?"; p.append(limit)
+            ids += [int(r[0]) for r in conn.execute(sql, p)]
+
+        # Partial-name only fallback. Full JSON is intentionally not in FTS anymore.
+        if len(set(ids)) < limit and len(q) >= 3:
+            toks = re.findall(r"[A-Za-z0-9_./:@-]+", query)
+            fts = " AND ".join('"' + t.replace('"','') + '"*' for t in toks if t)
+            if fts:
+                sql = f"""SELECT f.rowid FROM records_fts f
+                          JOIN records r ON r.id=f.rowid
+                          WHERE {pred} AND records_fts MATCH ?"""
+                p = [fts]
+                if platform:
+                    sql += " AND r.platform=?"; p.append(platform)
+                sql += " LIMIT ?"; p.append(limit)
+                try:
+                    ids += [int(r[0]) for r in conn.execute(sql, p)]
+                except sqlite3.Error:
+                    pass
+    return fetch_records_by_ids(conn, list(dict.fromkeys(ids))[:limit])
 
 
-def _get_panos_targets(obj: Any) -> list[str]:
-    targets: list[str] = []
-    interesting_keys = {
-        "ip-netmask", "ip_netmask", "ip-range", "ip_range", "fqdn",
-        "value", "member", "address", "source", "destination",
+def _fetch_ref(conn, device:str, ref_type:str, value:str, limit:int=200) -> list[sqlite3.Row]:
+    return conn.execute("""SELECT DISTINCT r.id,d.name AS device,r.platform,r.category,r.filename,r.name,r.data
+        FROM record_refs rr JOIN records r ON r.id=rr.record_id JOIN devices d ON d.id=r.device_id
+        WHERE r.platform='aws' AND d.name=? AND rr.ref_type=? AND rr.ref_value_lower=? LIMIT ?""",
+        (device,ref_type,value.lower(),limit)).fetchall()
+
+
+def _aws_ids(item:dict[str,Any]) -> dict[str,set[str]]:
+    out={x:set() for x in ("instance","eni","subnet","vpc")}
+    def walk(o:Any):
+        if isinstance(o,dict):
+            for k,v in o.items():
+                kl=str(k).lower().replace("_","")
+                if isinstance(v,str):
+                    if kl=="instanceid" and v.startswith("i-"):out["instance"].add(v)
+                    elif kl=="networkinterfaceid" and v.startswith("eni-"):out["eni"].add(v)
+                    elif kl=="subnetid" and v.startswith("subnet-"):out["subnet"].add(v)
+                    elif kl=="vpcid" and v.startswith("vpc-"):out["vpc"].add(v)
+                elif isinstance(v,(dict,list)):walk(v)
+        elif isinstance(o,list):
+            for x in o:walk(x)
+    walk(item); return out
+
+
+def _aws_expand(conn:sqlite3.Connection, query:str, base:list[sqlite3.Row], limit:int):
+    aws=[r for r in base if r["platform"]=="aws"]
+    if network_bounds(query): aws=[r for r in aws if not _is_sg(r["category"],_safe_json(r["data"]))]
+    related=list(aws); ids={int(r["id"]) for r in related}; sg_pairs=set()
+    def add_related(rr):
+        if int(rr["id"]) not in ids: ids.add(int(rr["id"])); related.append(rr)
+    # Relationship expansion is deliberately shallow and indexed.
+    for r in list(related):
+        item=_safe_json(r["data"])
+        if _is_sg(r["category"],item): continue
+        for sg in extract_direct_attached_sg_ids(item): sg_pairs.add((r["device"],sg))
+        refs=_aws_ids(item)
+        for typ,keep in (("instance",lambda c:_is_compute(c)),("eni",lambda c:"network_interface" in c or "eni" in c or "instance" in c),
+                         ("subnet",lambda c:"subnet" in c),("vpc",lambda c:"vpc" in c)):
+            for val in refs[typ]:
+                for rr in _fetch_ref(conn,r["device"],typ,val,100):
+                    if keep(_cat(rr["category"])): add_related(rr)
+    # SG reverse lookup: only resources that have the SG in their direct attachment list.
+    if query.lower().startswith("sg-"):
+        devices={r["device"] for r in aws}
+        if not devices: devices=[r[0] for r in conn.execute("SELECT name FROM devices WHERE name LIKE 'AWS:%'")]
+        for dev in devices:
+            for rr in _fetch_ref(conn,dev,"sg",query,limit):
+                if query in extract_direct_attached_sg_ids(_safe_json(rr["data"])): add_related(rr); sg_pairs.add((dev,query))
+    # Pull direct SG definitions and compute context.
+    for r in list(related):
+        item=_safe_json(r["data"])
+        if _is_compute(r["category"]):
+            for sg in extract_direct_attached_sg_ids(item): sg_pairs.add((r["device"],sg))
+    sg_records=[]
+    for dev,sg in sorted(sg_pairs):
+        for rr in _fetch_ref(conn,dev,"sg",sg,20):
+            if _is_sg(rr["category"],_safe_json(rr["data"])):
+                x=_record(rr,reason="directly_attached_security_group",matched_value=sg); x["attachment_scope"]="direct"; sg_records.append(x)
+    ctx=[]; seen=set()
+    if network_bounds(query): _add_ctx(ctx,seen,query,"query")
+    for r in related:
+        if _is_sg(r["category"],_safe_json(r["data"])): continue
+        source="aws_resource"; c=_cat(r["category"])
+        if "subnet" in c: source="aws_subnet"
+        elif "vpc" in c: source="aws_vpc"
+        for v in _network_values(conn,[r["id"]]): _add_ctx(ctx,seen,v,source,r["name"] or "")
+    return _dedupe([_record(r,reason="direct_or_related_aws") for r in related]),_dedupe(sg_records),ctx
+
+
+def _dedupe_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    seen = set(); out = []
+    for row in rows:
+        rid = int(row["id"])
+        if rid not in seen: seen.add(rid); out.append(row)
+    return out
+
+
+def _pan_record_rows(conn, ids:list[int]) -> list[sqlite3.Row]:
+    return fetch_records_by_ids(conn,ids)
+
+
+def _pan_entity_candidates(conn, names:set[str], limit:int) -> list[sqlite3.Row]:
+    if not names:return []
+    ids=[]
+    for name in list(names)[:1000]:
+        rows=conn.execute("SELECT id FROM records WHERE platform='panos' AND name_lower=? LIMIT ?",(name.lower(),limit)).fetchall()
+        ids.extend(int(r[0]) for r in rows)
+    return _pan_record_rows(conn,list(dict.fromkeys(ids))[:limit])
+
+
+def _expand_groups_sql(conn: sqlite3.Connection, names: set[str], limit: int = 1000) -> tuple[set[str], list[sqlite3.Row]]:
+    all_names = {x.lower() for x in names if x}
+    group_ids: set[int] = set()
+    rows: list[sqlite3.Row] = []
+    # Upward expansion only: object -> containing group -> containing parent group.
+    for _ in range(20):
+        if not all_names:
+            break
+        ph = ','.join('?' * len(all_names))
+        found = conn.execute(f"""SELECT DISTINCT
+                g.id, g.device_id, d.name AS device, g.platform, g.category,
+                g.filename, g.name, g.data
+            FROM pan_group_members gm
+            JOIN records g ON g.id=gm.group_record_id
+            JOIN devices d ON d.id=g.device_id
+            WHERE g.platform='panos'
+              AND gm.member_name_lower IN ({ph})
+            LIMIT ?""", [*all_names, limit]).fetchall()
+        new: set[str] = set()
+        for r in found:
+            if is_noisy_category(r["category"]):
+                continue
+            rid = int(r["id"])
+            n = (r["name"] or "").lower()
+            if rid not in group_ids:
+                group_ids.add(rid)
+                rows.append(r)
+                if n and n not in all_names:
+                    new.add(n)
+        if not new:
+            break
+        all_names.update(new)
+    return all_names, rows
+
+
+def _pan_inventory(conn: sqlite3.Connection, query: str, base: list[sqlite3.Row], ctx: list[dict[str, Any]], limit: int):
+    # Only authoritative PAN records may seed normal object/group/rule expansion.
+    ids = {int(r["id"]) for r in base if r["platform"] == "panos" and not _is_raw(r)}
+    seed_nets = _pan_seed_networks(query, ctx)
+
+    # For a /32 or CIDR, retrieve only address-object records that CONTAIN the seed.
+    # Do not use subnet/VPC roll-up context as fresh search targets.
+    for n in seed_nets:
+        ids.update(_find_pan_network_entity_ids(conn, n, limit=min(max(limit * 2, 200), 1000)))
+
+    base_pan = _pan_record_rows(conn, list(ids)[:max(limit * 3, 1000)])
+    objects: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = []
+    entity_names: set[str] = set()
+
+    for r in base_pan:
+        if _is_raw(r):
+            continue
+        role = _pan_role(r["category"], _safe_json(r["data"]))
+        rec = _record(r)
+        if role == "object":
+            objects.append(rec)
+            if r["name"]:
+                entity_names.add(str(r["name"]).lower())
+        elif role in ("group", "service_group"):
+            groups.append(rec)
+            if r["name"]:
+                entity_names.add(str(r["name"]).lower())
+
+    # Object/group membership is expanded upward only; this avoids pulling every
+    # child of a large unrelated group into an endpoint lookup.
+    expanded_names, group_rows = _expand_groups_sql(conn, entity_names, limit=1000)
+    group_seen = {x["record_id"] for x in groups}
+    for r in group_rows:
+        rec = _record(r, reason="contains_matched_object_or_group")
+        if rec["record_id"] not in group_seen:
+            groups.append(rec)
+            group_seen.add(rec["record_id"])
+        if r["name"]:
+            expanded_names.add(str(r["name"]).lower())
+
+    # If the original text query was itself a group/object name, keep exact base
+    # entities. Do not surface every entity referenced by a matched rule; that was
+    # another source of result amplification in the previous version.
+    names_for_rules = {x for x in expanded_names if x}
+    candidate_rule_ids: set[int] = {
+        int(r["id"]) for r in base_pan
+        if _pan_role(r["category"], _safe_json(r["data"])) == "rule"
     }
 
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key in interesting_keys:
-                if isinstance(value, str):
-                    targets.append(value)
-                elif isinstance(value, list):
-                    targets.extend(str(x) for x in value if isinstance(x, (str, int)))
-                elif isinstance(value, dict):
-                    targets.extend(_get_panos_targets(value))
-            elif isinstance(value, (dict, list)):
-                targets.extend(_get_panos_targets(value))
-    elif isinstance(obj, list):
-        for item in obj:
-            targets.extend(_get_panos_targets(item))
+    if names_for_rules:
+        ph = ','.join('?' * len(names_for_rules))
+        candidate_rule_ids.update(int(r[0]) for r in conn.execute(
+            f"SELECT DISTINCT rule_record_id FROM pan_rule_refs WHERE ref_name_lower IN ({ph}) LIMIT 3000",
+            [*names_for_rules],
+        ))
 
-    return targets
+    # Literal source/destination CIDRs in a rule are matched by containment against
+    # the original endpoint seed, not against every larger AWS subnet/VPC context.
+    for n in seed_nets:
+        bounds = network_bounds(n)
+        if not bounds:
+            continue
+        ver, start, end = bounds
+        candidate_rule_ids.update(int(r[0]) for r in conn.execute(
+            """SELECT DISTINCT rule_record_id FROM pan_rule_networks
+               WHERE version=? AND start_hex<=? AND end_hex>=? LIMIT 3000""",
+            (ver, f"{int(start):032x}", f"{int(end):032x}"),
+        ))
+
+    rule_rows = _pan_record_rows(conn, list(candidate_rule_ids)[:5000]) if candidate_rule_ids else []
+    matched_rules: list[dict[str, Any]] = []
+    names = {x.lower() for x in expanded_names if x}
+    for r in rule_rows:
+        if _pan_role(r["category"], _safe_json(r["data"])) != "rule":
+            continue
+        rec = _record(r)
+        reasons: list[str] = []
+        fields: list[str] = []
+        for field in ("source", "destination"):
+            hit = False
+            for ref in _rule_field(rec, field):
+                rl = ref.lower()
+                if rl in names:
+                    hit = True; reasons.append(f"{field}:object:{ref}")
+                elif network_bounds(ref) and any(value_matches_network_or_range(ref, n) for n in seed_nets):
+                    hit = True; reasons.append(f"{field}:network:{ref}")
+                elif rl == "any" and candidate_rule_ids:
+                    # 'any' is relevant only after some other aspect selected this rule.
+                    reasons.append(f"{field}:any")
+            if hit:
+                fields.append(field)
+        # A direct rule-name search is allowed through even without endpoint fields.
+        direct_rule = int(r["id"]) in {int(x["id"]) for x in base_pan if _pan_role(x["category"], _safe_json(x["data"])) == "rule"}
+        if not fields and not direct_rule:
+            continue
+        rec["match_fields"] = fields
+        rec["action"] = _rule_action(rec)
+        rec["decision"] = _decision(rec["action"])
+        rec["match_details"] = {"fields": reasons, "rollup_seeds": seed_nets}
+        matched_rules.append(rec)
+
+    # Soft display caps are intentionally much smaller than DB candidate caps.
+    return _dedupe(objects)[:250], _dedupe(groups)[:250], _dedupe(matched_rules)[:500], []
+
+
+def _decision(action:str)->str:
+    a=str(action or "").lower()
+    if a=="allow":return "ALLOWED"
+    if a in {"deny","drop","reject","reset-client","reset-server","reset-both"}:return "DENIED"
+    if a in {"disabled","disable"}:return "DISABLED"
+    return "OTHER"
+
+
+def _parse_port(port:str):
+    raw=port.strip().lower(); proto=None
+    if raw.startswith("tcp"):proto="tcp"
+    elif raw.startswith("udp"):proto="udp"
+    m=re.search(r"(?<!\d)(\d{1,5})(?!\d)",raw)
+    return proto,int(m.group(1)) if m else None,raw
+
+
+def _service_specs(data:Any)->list[str]:
+    vals=[]
+    def walk(o:Any,key=""):
+        if isinstance(o,dict):
+            for k,v in o.items():
+                kl=str(k).lower().replace("_","-")
+                if kl in {"port","destination-port","source-port"} and not isinstance(v,(dict,list)):vals.append(str(v))
+                else:walk(v,k)
+        elif isinstance(o,list):
+            for x in o:walk(x,key)
+    walk(_pan_payload(data)); return vals
+
+
+def _port_spec_hit(port:int,spec:str)->bool:
+    for p in re.split(r"[,\s]+",spec):
+        if "-" in p:
+            a,b=p.split("-",1)
+            if a.isdigit() and b.isdigit() and int(a)<=port<=int(b):return True
+        elif p.isdigit() and int(p)==port:return True
+    return False
+
+
+def _service_hit(conn: sqlite3.Connection, refs: list[str], port: str, cache: dict[str, list[sqlite3.Row]], visited=None) -> bool:
+    if not port:
+        return True
+    proto, num, raw = _parse_port(port)
+    if any(x.lower() == "any" for x in refs):
+        return True
+    if num is None:
+        return False
+    if visited is None:
+        visited = set()
+
+    def one(ref: str) -> bool:
+        key = ref.lower()
+        if key in visited:
+            return False
+        visited.add(key)
+        if re.search(rf"(?<!\d){num}(?!\d)", key):
+            return True
+        if key not in cache:
+            cache[key] = conn.execute("""SELECT r.id,r.device_id,d.name AS device,r.platform,
+                    r.category,r.filename,r.name,r.data
+                FROM records r JOIN devices d ON d.id=r.device_id
+                WHERE r.platform='panos' AND r.name_lower=? LIMIT 50""", (key,)).fetchall()
+        for r in cache[key]:
+            if is_noisy_category(r["category"]):
+                continue
+            role = _pan_role(r["category"], _safe_json(r["data"]))
+            if role == "service_group":
+                rec = _record(r)
+                if any(one(x) for x in _group_members(rec)):
+                    return True
+            elif role == "service":
+                blob = str(r["data"]).lower()
+                if proto and proto not in blob:
+                    continue
+                if any(_port_spec_hit(num, s) for s in _service_specs(_safe_json(r["data"]))):
+                    return True
+        return False
+    return any(one(x) for x in refs)
+
+
+def _route53_query_matches(record: dict[str, Any], query: str) -> bool:
+    """Return True only when this individual Route53 record matches the query."""
+    q = str(query or "").strip()
+    if not q:
+        return False
+    qlow = q.lower()
+    values: list[str] = []
+    name = record.get("Name") or record.get("name")
+    if name:
+        values.append(str(name))
+    rtype = record.get("Type") or record.get("type")
+    if rtype:
+        values.append(str(rtype))
+    for rr in record.get("ResourceRecords") or []:
+        if isinstance(rr, dict) and rr.get("Value") is not None:
+            values.append(str(rr["Value"]))
+        elif rr is not None:
+            values.append(str(rr))
+    alias = record.get("AliasTarget") or record.get("alias_target")
+    if isinstance(alias, dict):
+        for k in ("DNSName", "HostedZoneId", "EvaluateTargetHealth"):
+            if alias.get(k) is not None:
+                values.append(str(alias[k]))
+    elif alias:
+        values.append(str(alias))
+    if record.get("Value") is not None:
+        values.append(str(record["Value"]))
+
+    info = classify_ip_search(q)
+    if info.get("family") in (4, 6):
+        qb = network_bounds(q)
+        if not qb:
+            return False
+        for value in values:
+            vb = network_bounds(value)
+            if vb and vb[0] == qb[0] and vb[1] <= qb[1] and vb[2] >= qb[2]:
+                return True
+        return False
+    return any(qlow in value.lower() for value in values)
+
+
+def _route53_child_records(row: sqlite3.Row, query: str) -> list[dict[str, Any]]:
+    """Convert a collector's hosted-zone blob into only the matching RRsets."""
+    data = _safe_json(row["data"])
+    record_sets = data.get("ResourceRecordSets") if isinstance(data, dict) else None
+    if not isinstance(record_sets, list):
+        return []
+    zone_name = data.get("Name") or data.get("name") or ""
+    zone_id = data.get("Id") or data.get("HostedZoneId") or ""
+    out = []
+    for rr in record_sets:
+        if not isinstance(rr, dict) or not _route53_query_matches(rr, query):
+            continue
+        child = dict(rr)
+        child["HostedZoneName"] = zone_name
+        child["HostedZoneId"] = zone_id
+        out.append({
+            "record_id": f'{int(row["id"])}:{str(rr.get("Name") or "")}:{str(rr.get("Type") or "")}',
+            "device": row["device"],
+            "platform": "aws",
+            "type": "route53_record",
+            "category": "route53_record",
+            "file": row["filename"],
+            "name": str(rr.get("Name") or zone_name or "Route53 Record"),
+            "data": child,
+            "match_reason": "matched_route53_record",
+            "matched_value": query,
+        })
+    return out
+
+
+def _expand_route53_matches(conn: sqlite3.Connection, records: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        if rec.get("platform") != "aws":
+            out.append(rec)
+            continue
+        cat = _cat(rec.get("category", ""))
+        data = rec.get("data") if isinstance(rec.get("data"), dict) else {}
+        if "route53" not in cat and "hostedzone" not in cat and "resource_record_sets" not in data:
+            out.append(rec)
+            continue
+        # Find the original zone row and emit only matching RRsets.
+        rid = str(rec.get("record_id", ""))
+        try:
+            base_id = int(rid.split(":", 1)[0])
+        except (TypeError, ValueError):
+            base_id = None
+        if base_id is None:
+            continue
+        rows = conn.execute("""SELECT r.id,r.device_id,d.name AS device,r.platform,r.category,r.filename,r.name,r.data
+                              FROM records r JOIN devices d ON d.id=r.device_id WHERE r.id=?""", (base_id,)).fetchall()
+        if rows:
+            out.extend(_route53_child_records(rows[0], query))
+    return out
 
 
 class InfrastructureDataSource:
@@ -146,708 +746,387 @@ class InfrastructureDataSource:
         self._db_file = db_file
 
     @property
-    def db_file(self) -> Path:
-        return self._db_file if self._db_file is not None else DB_PATH
+    def db_file(self):
+        return self._db_file or DB_PATH
 
-    def files_count(self) -> int:
-        conn = get_db(self.db_file)
+    def files_count(self):
+        c = get_db(self.db_file)
         try:
-            return int(conn.execute("SELECT COUNT(*) FROM records").fetchone()[0])
+            return int(c.execute("SELECT COUNT(*) FROM records").fetchone()[0])
         finally:
-            conn.close()
+            c.close()
 
-    def devices_count(self) -> int:
-        conn = get_db(self.db_file)
+    def devices_count(self):
+        c = get_db(self.db_file)
         try:
-            return int(conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0])
+            return int(c.execute("SELECT COUNT(*) FROM devices").fetchone()[0])
         finally:
-            conn.close()
+            c.close()
 
-    def get_stats(self) -> dict[str, Any]:
-        conn = get_db(self.db_file)
+    def get_stats(self):
+        c = get_db(self.db_file)
         try:
-            panos_counts = {
-                row["category"]: row["cnt"]
-                for row in conn.execute(
-                    "SELECT category, COUNT(*) AS cnt FROM records WHERE platform='panos' GROUP BY category"
-                ).fetchall()
-            }
-            aws_summary = {
-                row["category"]: row["cnt"]
-                for row in conn.execute(
-                    "SELECT category, COUNT(*) AS cnt FROM records WHERE platform='aws' GROUP BY category"
-                ).fetchall()
-            }
-            aws_accounts_count = conn.execute(
-                "SELECT COUNT(DISTINCT name) FROM devices WHERE name LIKE 'AWS:%'"
-            ).fetchone()[0]
-            total_records = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
             return {
-                "panos": panos_counts,
-                "aws_resources": aws_summary,
-                "aws_accounts_scanned": aws_accounts_count,
-                "total_files": total_records,
+                "panos": {r["category"]: r["cnt"] for r in c.execute("SELECT category,COUNT(*) cnt FROM records WHERE platform='panos' GROUP BY category")},
+                "aws_resources": {r["category"]: r["cnt"] for r in c.execute("SELECT category,COUNT(*) cnt FROM records WHERE platform='aws' GROUP BY category")},
+                "aws_accounts_scanned": int(c.execute("SELECT COUNT(*) FROM devices WHERE name LIKE 'AWS:%'").fetchone()[0]),
+                "total_files": int(c.execute("SELECT COUNT(*) FROM records").fetchone()[0]),
+                "indexed_terms": int(c.execute("SELECT COUNT(*) FROM record_terms").fetchone()[0]),
+                "indexed_networks": int(c.execute("SELECT COUNT(*) FROM record_networks").fetchone()[0]),
+                "indexed_refs": int(c.execute("SELECT COUNT(*) FROM record_refs").fetchone()[0]),
             }
         finally:
-            conn.close()
+            c.close()
 
-    def investigate(self, query: str, limit: int = 500) -> dict[str, Any]:
-        query = query.strip()
-        query_network = extract_ip_or_cidr(query)
-        search_info = classify_ip_search(query) if 'classify_ip_search' in globals() else {"type": "unknown", "family": "unknown"}
-
-        output: dict[str, Any] = {
-            "query": query,
-            "query_type": search_info.get("type", "unknown"),
-            "query_family": search_info.get("family", "unknown"),
-            "matched_objects": [],
-            "matched_rules": [],
-            "all_entries_matches": [],
-            "aws_matches": [],
-            "attached_security_groups": [],
-            "palo_matches": [],
-            "summary": {},
-        }
-
+    def investigate(self, query: str, limit: int = 300):
+        timings = {}
+        started = time.perf_counter()
+        info = classify_ip_search(query)
         conn = get_db(self.db_file)
-        cursor = conn.cursor()
         try:
-            matched_aws_record_ids: set[int] = set()
-            attached_sg_ids: set[tuple[str, str]] = set()
-            related_cidrs_to_match: set[str] = set()
+            t0 = time.perf_counter()
+            if info["family"] in (4, 6):
+                # Search PAN and AWS independently.  Do not let a large PAN network
+                # result set consume the shared search limit and hide an EC2/ENI.
+                pan_base = _base_search(conn, query, platform="panos", limit=limit)
+                aws_base = _base_search(conn, query, platform="aws", limit=limit)
 
-            if query_network:
-                related_cidrs_to_match.add(query_network.compressed)
+                # Always augment the network-index result with exact endpoint matches.
+                # A /32 can legitimately hit a VPC/subnet network first; that must
+                # never prevent us from also returning the EC2/ENI/RDS/Route53
+                # record that actually owns or contains the IP.
+                bounds = network_bounds(query)
+                target_ip = str(bounds[1]) if bounds and bounds[0] in (4, 6) else query.split("/", 1)[0].strip()
+                exact_ids: list[int] = []
 
-            pending_aws_lookups: list[Any] = []
-            if query_network:
-                target_ip = str(query_network.network_address)
-                target_cidr = query_network.compressed
-                cursor.execute(
-                    """
-                    SELECT r.id, d.name AS device, r.platform, r.category,
-                           r.filename, r.name, r.data
-                    FROM records r
-                    JOIN devices d ON r.device_id = d.id
-                    WHERE r.platform = 'aws' AND (r.data LIKE ? OR r.data LIKE ?)
+                rows = conn.execute("""
+                    SELECT DISTINCT rt.record_id
+                    FROM record_terms rt JOIN records r ON r.id=rt.record_id
+                    WHERE r.platform='aws' AND rt.term_lower=?
                     LIMIT ?
-                    """,
-                    (f"%{target_ip}%", f"%{target_cidr}%", limit),
-                )
-                pending_aws_lookups.extend(cursor.fetchall())
-            else:
-                clean_q = _clean_fts_query(query)
-                if clean_q:
-                    cursor.execute(
-                        """
-                        SELECT r.id, d.name AS device, r.platform, r.category,
-                               r.filename, r.name, r.data
-                        FROM records_fts fts
-                        JOIN records r ON r.id = fts.rowid
-                        JOIN devices d ON r.device_id = d.id
-                        WHERE r.platform = 'aws' AND records_fts MATCH ?
+                """, (target_ip.lower(), limit)).fetchall()
+                exact_ids.extend(int(x[0]) for x in rows)
+
+                # Older databases may have the endpoint only in raw JSON. SQLite
+                # JSON1 gives us an exact recursive scalar lookup regardless of
+                # whether the collector stored EC2/ENI/RDS/R53 data as nested blobs.
+                try:
+                    rows = conn.execute("""
+                        SELECT DISTINCT r.id
+                        FROM records r, json_tree(r.data) jt
+                        WHERE r.platform='aws'
+                          AND jt.type IN ('text','integer','real')
+                          AND lower(CAST(jt.value AS TEXT))=?
                         LIMIT ?
-                        """,
-                        (clean_q, limit),
-                    )
-                    pending_aws_lookups.extend(cursor.fetchall())
+                    """, (target_ip.lower(), limit)).fetchall()
+                    exact_ids.extend(int(x[0]) for x in rows)
+                except sqlite3.OperationalError:
+                    pass
 
-            for row in pending_aws_lookups:
-                if row["id"] in matched_aws_record_ids:
+                # Final compatibility fallback for databases without JSON1.
+                if not exact_ids:
+                    rows = conn.execute("""
+                        SELECT r.id
+                        FROM records r
+                        WHERE r.platform='aws'
+                          AND (r.category LIKE '%instance%' OR r.category LIKE '%network_interface%'
+                               OR r.category LIKE '%eni%' OR r.category LIKE '%rds%'
+                               OR r.category LIKE '%load_balancer%' OR r.category LIKE '%route53%'
+                               OR r.category LIKE '%hosted%')
+                          AND lower(r.data) LIKE ?
+                        LIMIT ?
+                    """, (f'%{target_ip.lower()}%', limit)).fetchall()
+                    exact_ids.extend(int(x[0]) for x in rows)
+
+                if exact_ids:
+                    aws_base = _dedupe_rows(aws_base + fetch_records_by_ids(conn, exact_ids))
+                base = _dedupe_rows(pan_base + aws_base)
+            else:
+                base = _base_search(conn, query, limit=limit)
+            timings["indexed_search_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+
+            t0 = time.perf_counter()
+            aws, sgs, ctx = _aws_expand(conn, query, base, limit)
+            timings["aws_relationships_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+
+            # Only authoritative PAN objects/groups can contribute endpoint networks.
+            pan_base = [r for r in base if r["platform"] == "panos" and not _is_raw(r)]
+            seen = {x["value"].lower() for x in ctx}
+            for r in pan_base:
+                role = _pan_role(r["category"], _safe_json(r["data"]))
+                if role not in {"object", "group"}:
                     continue
-                matched_aws_record_ids.add(row["id"])
-                try:
-                    item = json.loads(row["data"])
-                except json.JSONDecodeError:
-                    continue
+                for v in _network_values(conn, [r["id"]]):
+                    _add_ctx(ctx, seen, v, "palo_object", r["name"] or "")
 
-                output["aws_matches"].append({
-                    "device": row["device"],
-                    "type": row["category"],
-                    "file": row["filename"],
-                    "name": row["name"],
-                    "data": item,
-                })
-
-                dev_name = row["device"]
-                for sg_id in extract_direct_attached_sg_ids(item):
-                    attached_sg_ids.add((dev_name, sg_id))
-
-                subnet_id = item.get("SubnetId")
-                vpc_id = item.get("VpcId")
-                item_cidr = item.get("CidrBlock")
-                if item_cidr:
-                    related_cidrs_to_match.add(str(item_cidr))
-
-                cursor.execute(
-                    """
-                    SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE REPLACE(r.category, '-', '_') LIKE '%subnet%' AND d.name = ?
-                    """,
-                    (dev_name,),
-                )
-                for s_row in cursor.fetchall():
-                    try:
-                        s_data = json.loads(s_row["data"])
-                    except json.JSONDecodeError:
+            # Reverse PAN -> AWS mapping uses only endpoint seeds, never a recursively
+            # enlarged set of VPC/subnet networks.
+            existing = {x["record_id"] for x in aws}
+            for n in _pan_seed_networks(query, ctx):
+                for rid in find_network_record_ids(conn, n, platform="aws", limit=limit * 2, include_noisy=False):
+                    if rid in existing:
                         continue
-                    s_cidr = s_data.get("CidrBlock")
-                    if s_cidr and query_network:
-                        s_net = extract_ip_or_cidr(s_cidr)
-                        if s_net and query_network.version == s_net.version and query_network.subnet_of(s_net):
-                            related_cidrs_to_match.add(str(s_cidr))
-
-                cursor.execute(
-                    """
-                    SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE REPLACE(r.category, '-', '_') LIKE '%vpc%' AND d.name = ?
-                    """,
-                    (dev_name,),
-                )
-                for v_row in cursor.fetchall():
-                    try:
-                        v_data = json.loads(v_row["data"])
-                    except json.JSONDecodeError:
+                    rr = fetch_records_by_ids(conn, [rid])
+                    if not rr:
                         continue
-                    v_cidr = v_data.get("CidrBlock")
-                    if v_cidr and query_network:
-                        v_net = extract_ip_or_cidr(v_cidr)
-                        if v_net and query_network.version == v_net.version and query_network.subnet_of(v_net):
-                            related_cidrs_to_match.add(str(v_cidr))
-                    for block in v_data.get("CidrBlockAssociationSet", []):
-                        if isinstance(block, dict) and block.get("CidrBlock") and query_network:
-                            b_net = extract_ip_or_cidr(block["CidrBlock"])
-                            if b_net and query_network.version == b_net.version and query_network.subnet_of(b_net):
-                                related_cidrs_to_match.add(str(block["CidrBlock"]))
-
-                if subnet_id:
-                    cursor.execute(
-                        """
-                        SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                        WHERE REPLACE(r.category, '-', '_') LIKE '%subnet%'
-                          AND (r.name = ? OR json_extract(r.data, '$.SubnetId') = ?)
-                          AND d.name = ?
-                        """,
-                        (subnet_id, subnet_id, dev_name),
-                    )
-                    for s_row in cursor.fetchall():
-                        try:
-                            s_data = json.loads(s_row["data"])
-                        except json.JSONDecodeError:
-                            continue
-                        if s_data.get("CidrBlock"):
-                            related_cidrs_to_match.add(str(s_data["CidrBlock"]))
-
-                if vpc_id:
-                    cursor.execute(
-                        """
-                        SELECT data FROM records r JOIN devices d ON r.device_id = d.id
-                        WHERE REPLACE(r.category, '-', '_') LIKE '%vpc%'
-                          AND (r.name = ? OR json_extract(r.data, '$.VpcId') = ?)
-                          AND d.name = ?
-                        """,
-                        (vpc_id, vpc_id, dev_name),
-                    )
-                    for v_row in cursor.fetchall():
-                        try:
-                            v_data = json.loads(v_row["data"])
-                        except json.JSONDecodeError:
-                            continue
-                        if v_data.get("CidrBlock"):
-                            related_cidrs_to_match.add(str(v_data["CidrBlock"]))
-                        for block in v_data.get("CidrBlockAssociationSet", []):
-                            if isinstance(block, dict) and block.get("CidrBlock"):
-                                related_cidrs_to_match.add(str(block["CidrBlock"]))
-
-            all_target_nets = [query_network] if query_network else []
-            for cidr in related_cidrs_to_match:
-                net_obj = extract_ip_or_cidr(cidr)
-                if net_obj:
-                    all_target_nets.append(net_obj)
-
-            cursor.execute(
-                """
-                SELECT r.id, r.name, r.category, r.data, d.name AS device_name
-                FROM records r JOIN devices d ON r.device_id = d.id
-                WHERE r.platform = 'panos'
-                  AND (REPLACE(r.category, '-', '_') LIKE '%object%'
-                    OR REPLACE(r.category, '-', '_') LIKE '%address%'
-                    OR REPLACE(r.category, '-', '_') LIKE '%group%')
-                """
-            )
-            for row in cursor.fetchall():
-                try:
-                    p_data = json.loads(row["data"])
-                except json.JSONDecodeError:
-                    continue
-                p_val = p_data.get("ip_net") or p_data.get("address") or p_data.get("value") or row["name"]
-                p_net = extract_ip_or_cidr(str(p_val))
-                if not p_net:
-                    continue
-                for target_net in all_target_nets:
-                    if target_net.version != p_net.version:
+                    r = rr[0]
+                    item = _safe_json(r["data"])
+                    cat = _cat(r["category"])
+                    if _is_sg(r["category"], item):
                         continue
-                    if target_net.overlaps(p_net):
-                        match_entry = {
-                            "device": row["device_name"],
-                            "type": row["category"],
-                            "file": "",
-                            "name": row["name"],
-                            "data": p_data,
-                            "match_context": "aws_network_context" if target_net != query_network else "query",
-                            "matched_cidr": str(target_net),
-                        }
-                        output["palo_matches"].append(match_entry)
-                        if "rule" in row["category"].lower():
-                            output["matched_rules"].append(match_entry)
-                        else:
-                            output["matched_objects"].append(match_entry)
-                        break
+                    if any(x in cat for x in ("instance","network_interface","eni","subnet","vpc","load_balancer","rds","db","route53","hosted")):
+                        aws.append(_record(r, reason="reverse_network_relationship", matched_value=n))
+                        existing.add(rid)
 
-            for dev_name, sg_id in attached_sg_ids:
-                cursor.execute(
-                    """
-                    SELECT r.id, d.name AS device, r.category, r.filename, r.name, r.data
-                    FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE r.platform = 'aws' AND (REPLACE(r.category, '-', '_') = 'security_groups'
-                        OR REPLACE(r.category, '-', '_') = 'security_group'
-                        OR REPLACE(r.category, '-', '_') LIKE '%security_group%')
-                      AND (r.name = ? OR json_extract(r.data, '$.GroupId') = ?)
-                      AND d.name = ?
-                    """,
-                    (sg_id, sg_id, dev_name),
-                )
-                for sg_row in cursor.fetchall():
-                    try:
-                        sg_item = json.loads(sg_row["data"])
-                    except json.JSONDecodeError:
-                        continue
-                    if not any(x["record_id"] == sg_row["id"] for x in output["attached_security_groups"]):
-                        output["attached_security_groups"].append({
-                            "record_id": sg_row["id"],
-                            "device": sg_row["device"],
-                            "type": sg_row["category"],
-                            "file": sg_row["filename"],
-                            "name": sg_row["name"],
-                            "data": sg_item,
-                        })
+            t0 = time.perf_counter()
+            objects, groups, rules, _ = _pan_inventory(conn, query, base, ctx, limit)
+            timings["palo_relationships_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
-            matched_panos_ids: set[int] = set()
-            matched_object_names: set[str] = set()
+            # Noisy aggregate JSON is queried separately and cannot affect any of the
+            # authoritative result sections above.
+            t0 = time.perf_counter()
+            noisy_names = [x.get("name", "") for x in (objects + groups + rules)]
+            noisy = _noisy_search(conn, query, noisy_names, limit=50)
+            timings["noisy_exact_lookup_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
-            if related_cidrs_to_match:
-                cursor.execute(
-                    """
-                    SELECT r.id, d.name AS device, r.platform, r.category,
-                           r.filename, r.name, r.data
-                    FROM records r JOIN devices d ON r.device_id = d.id
-                    WHERE r.platform = 'panos'
-                    """
-                )
-                all_panos_records = cursor.fetchall()
+            aws = _expand_route53_matches(conn, aws, query)
+            aws = _dedupe(aws)
+            sgs = _dedupe(sgs)
+            # A direct SG definition belongs in the SG section, not duplicated in AWS.
+            sg_keys = {(x.get("device"), x.get("name")) for x in sgs}
+            aws = [x for x in aws if not (_is_sg(x.get("category", ""), x.get("data", {})) and (x.get("device"), x.get("name")) in sg_keys)]
 
-                for row in all_panos_records:
-                    try:
-                        item_data = json.loads(row["data"])
-                    except json.JSONDecodeError:
-                        continue
-
-                    is_match = False
-                    targets = _get_panos_targets(item_data) if '_get_panos_targets' in globals() else []
-                    for cidr in related_cidrs_to_match:
-                        for target in targets:
-                            if target and ('value_matches_network_or_range' not in globals() or value_matches_network_or_range(cidr, target)):
-                                is_match = True
-                                break
-                        if is_match:
-                            break
-
-                    if is_match:
-                        matched_panos_ids.add(row["id"])
-                        eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
-                        obj_name = row["name"] or (
-                            item_data.get("name") if isinstance(item_data, dict) else ""
-                        ) or (
-                            eval_obj.get("@name") if isinstance(eval_obj, dict) else ""
-                        )
-                        if obj_name:
-                            matched_object_names.add(str(obj_name))
-                        
-                        match_entry = {
-                            "device": row["device"],
-                            "type": row["category"],
-                            "file": row["filename"],
-                            "name": row["name"],
-                            "data": item_data,
-                        }
-                        output["all_entries_matches"].append(match_entry)
-                        if "rule" in row["category"].lower():
-                            output["matched_rules"].append(match_entry)
-                        else:
-                            output["matched_objects"].append(match_entry)
-
-                expanded = True
-                expansion_depth = 0
-                while expanded and expansion_depth < 5:
-                    expanded = False
-                    expansion_depth += 1
-                    for row in all_panos_records:
-                        if row["id"] in matched_panos_ids:
-                            continue
-                        try:
-                            item_data = json.loads(row["data"])
-                        except json.JSONDecodeError:
-                            continue
-                        data_str = row["data"]
-                        for name in list(matched_object_names):
-                            if name and re.search(r"\b" + re.escape(name) + r"\b", data_str, re.IGNORECASE):
-                                matched_panos_ids.add(row["id"])
-                                eval_obj = item_data.get("entry", item_data) if isinstance(item_data, dict) else item_data
-                                obj_name = row["name"] or (
-                                    eval_obj.get("@name") if isinstance(eval_obj, dict) else ""
-                                )
-                                if obj_name and str(obj_name) not in matched_object_names:
-                                    matched_object_names.add(str(obj_name))
-                                    expanded = True
-                                
-                                match_entry = {
-                                    "device": row["device"],
-                                    "type": row["category"],
-                                    "file": row["filename"],
-                                    "name": row["name"],
-                                    "data": item_data,
-                                }
-                                output["all_entries_matches"].append(match_entry)
-                                if "rule" in row["category"].lower():
-                                    output["matched_rules"].append(match_entry)
-                                else:
-                                    output["matched_objects"].append(match_entry)
-                                break
-            
-            clean_q = _clean_fts_query(query)
-            if clean_q and not query_network:
-                cursor.execute(
-                    """
-                    SELECT r.id, d.name AS device, r.platform, r.category,
-                           r.filename, r.name, r.data
-                    FROM records_fts fts
-                    JOIN records r ON r.id = fts.rowid
-                    JOIN devices d ON r.device_id = d.id
-                    WHERE records_fts MATCH ?
-                    LIMIT ?
-                    """,
-                    (clean_q, limit),
-                )
-                for row in cursor.fetchall():
-                    if row["id"] in matched_panos_ids:
-                        continue
-                    try:
-                        item_data = json.loads(row["data"])
-                    except json.JSONDecodeError:
-                        continue
-                    matched_panos_ids.add(row["id"])
-                    
-                    match_entry = {
-                        "device": row["device"],
-                        "type": row["category"],
-                        "file": row["filename"],
-                        "name": row["name"],
-                        "data": item_data,
-                    }
-                    if row["platform"] == "panos":
-                        output["all_entries_matches"].append(match_entry)
-                        if "rule" in row["category"].lower():
-                            output["matched_rules"].append(match_entry)
-                        else:
-                            output["matched_objects"].append(match_entry)
-                    else:
-                        if not any(x["data"] == item_data for x in output["aws_matches"]):
-                            output["aws_matches"].append(match_entry)
-
-            output["summary"] = {
-                "aws_resources": len(output["aws_matches"]),
-                "attached_sgs": len(output["attached_security_groups"]),
-                "palo_objects": len(output["matched_objects"]),
-                "palo_rules": len(output["matched_rules"]),
-                "all_entries": len(output["all_entries_matches"]),
+            timings["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
+            return {
+                "query": query,
+                "query_type": info["type"],
+                "query_family": info["family"],
+                "aws_matches": aws,
+                "attached_security_groups": sgs,
+                "matched_objects": objects,
+                "matched_groups": groups,
+                "matched_rules": rules,
+                "all_entries_matches": noisy,
+                "noisy_matches": noisy,
+                "network_context": ctx,
+                "rollup_seeds": _pan_seed_networks(query, ctx),
+                "timing": timings,
+                "summary": {
+                    "aws_resources": len(aws),
+                    "attached_sgs": len(sgs),
+                    "palo_objects": len(objects),
+                    "palo_groups": len(groups),
+                    "palo_rules": len(rules),
+                    "all_entries": len(noisy),
+                },
             }
-            return output
         finally:
             conn.close()
-                
-    def policy_lookup(self, source: str = "", destination: str = "", port: str = "") -> dict[str, Any]:
-        source = source.strip()
-        destination = destination.strip()
-        port = port.strip()
-    
-        output = {
-            "query": {"source": source, "destination": destination, "port": port},
-            "matched_objects": [],
-            "matched_groups": [],
-            "matched_rules": []
-        }
-    
+
+    def policy_lookup(self, source: str = "", destination: str = "", port: str = ""):
+        source, destination, port = source.strip(), destination.strip(), port.strip()
+        total = time.perf_counter()
+        if not source and not destination:
+            return {"query": {"source": source, "destination": destination, "port": port}, "source_context": None,
+                    "destination_context": None, "matched_objects": [], "matched_groups": [], "matched_rules": [],
+                    "rules": [], "all_entries_matches": [], "summary": {"objects": 0, "groups": 0, "rules": 0, "allow": 0, "deny": 0}}
+
+        t = time.perf_counter()
+        src = self.investigate(source, 250) if source else None
+        dst = self.investigate(destination, 250) if destination else None
+        timing = {"endpoint_resolution_ms": round((time.perf_counter() - t) * 1000, 2)}
+
+        def endpoint(inv, q):
+            if not inv:
+                return None
+            names = {q.lower()}
+            for r in inv.get("matched_objects", []) + inv.get("matched_groups", []):
+                if r.get("name"):
+                    names.add(r["name"].lower())
+            nets = list(inv.get("rollup_seeds", []))
+            if network_bounds(q) and q not in nets:
+                nets.insert(0, q)
+            return {
+                "query": q,
+                "query_type": inv.get("query_type"),
+                "names": sorted(names),
+                "networks": nets,
+                "aws_matches": inv.get("aws_matches", []),
+                "attached_security_groups": inv.get("attached_security_groups", []),
+                "objects": inv.get("matched_objects", []),
+                "groups": inv.get("matched_groups", []),
+            }
+
+        srcctx, dstctx = endpoint(src, source), endpoint(dst, destination)
         conn = get_db(self.db_file)
-        cursor = conn.cursor()
+        matched: list[dict[str, Any]] = []
         try:
-            cursor.execute(
-                """
-                SELECT r.id, r.name, r.category, r.data, d.name AS device_name
-                FROM records r JOIN devices d ON r.device_id = d.id
-                WHERE LOWER(r.platform) LIKE '%pan%'
-                """
-            )
-            rows = cursor.fetchall()
+            t = time.perf_counter()
+            ids: set[int] = set()
+            for ctx, field in ((srcctx, "source"), (dstctx, "destination")):
+                if not ctx:
+                    continue
+                names = set(ctx["names"])
+                if names:
+                    ph = ','.join('?' * len(names))
+                    ids.update(int(r[0]) for r in conn.execute(
+                        f"SELECT DISTINCT rule_record_id FROM pan_rule_refs WHERE field=? AND ref_name_lower IN ({ph})",
+                        [field, *names],
+                    ))
+                for n in ctx["networks"]:
+                    b = network_bounds(n)
+                    if b:
+                        v, s, e = b
+                        ids.update(int(r[0]) for r in conn.execute(
+                            "SELECT DISTINCT rule_record_id FROM pan_rule_networks WHERE field=? AND version=? AND start_hex<=? AND end_hex>=?",
+                            (field, v, f"{int(s):032x}", f"{int(e):032x}"),
+                        ))
+
+            # 'any' must be considered on the specified sides, but it does not by
+            # itself make a rule a match; final side() evaluation still requires both.
+            for field, ctx in (("source", srcctx), ("destination", dstctx)):
+                if ctx:
+                    ids.update(int(r[0]) for r in conn.execute(
+                        "SELECT DISTINCT rule_record_id FROM pan_rule_refs WHERE field=? AND ref_name_lower='any'", (field,)
+                    ))
+
+            rows = fetch_records_by_ids(conn, list(ids)[:10000])
+            timing["rule_candidate_sql_ms"] = round((time.perf_counter() - t) * 1000, 2)
+            t = time.perf_counter()
+            service_cache: dict[str, list[sqlite3.Row]] = {}
+
+            def side(rec, field, ctx):
+                if not ctx:
+                    return True, ["not_specified"]
+                refs = _rule_field(rec, field)
+                reasons = []
+                names = set(ctx["names"])
+                nets = ctx["networks"]
+                for x in refs:
+                    xl = x.lower()
+                    if xl == "any":
+                        reasons.append("any")
+                    elif xl in names:
+                        reasons.append(f"entity:{x}")
+                    elif network_bounds(x) and any(value_matches_network_or_range(x, n) for n in nets):
+                        reasons.append(f"network:{x}")
+                return bool(reasons), reasons
+
+            for r in rows:
+                if is_noisy_category(r["category"]) or _pan_role(r["category"], _safe_json(r["data"])) != "rule":
+                    continue
+                rec = _record(r)
+                sh, sr = side(rec, "source", srcctx)
+                dh, dr = side(rec, "destination", dstctx)
+                if sh and dh and _service_hit(conn, _rule_field(rec, "service"), port, service_cache):
+                    rec["action"] = _rule_action(rec)
+                    rec["decision"] = _decision(rec["action"])
+                    rec["match_details"] = {"source": sr, "destination": dr, "services": _rule_field(rec, "service"), "port_query": port}
+                    matched.append(rec)
+            timing["rule_evaluation_ms"] = round((time.perf_counter() - t) * 1000, 2)
         finally:
             conn.close()
-    
-        if not rows:
-            return output
-    
-        all_records = []
-        for row in rows:
-            try:
-                item = json.loads(row["data"])
-            except Exception:
-                continue
-            eval_item = item.get("entry", item) if isinstance(item, dict) else item
-            if not isinstance(eval_item, dict):
-                eval_item = {"value": eval_item}
-            
-            name = row["name"] or eval_item.get("@name") or eval_item.get("name") or ""
-            all_records.append({
-                "name": str(name),
-                "category": str(row["category"]).replace("-", "_").lower(),
-                "device": row["device_name"],
-                "data": eval_item,
-                "raw": row["data"].lower()
-            })
-    
-        def match_query(text: str, q: str) -> bool:
-            if not q:
-                return False
-            q_l = q.lower()
-            t_l = text.lower()
-            if q_l in t_l:
-                return True
-            if q_l.split('/')[0] in t_l:
-                return True
-            return False
-    
-        matched_obj_names = set()
-        for rec in all_records:
-            cat = rec["category"]
-            if "security_rules" in cat or "nat_rules" in cat:
-                continue
-    
-            is_match = False
-            if source and match_query(rec["name"], source):
-                is_match = True
-            elif source and match_query(json.dumps(rec["data"]), source):
-                is_match = True
-    
-            if destination and match_query(rec["name"], destination):
-                is_match = True
-            elif destination and match_query(json.dumps(rec["data"]), destination):
-                is_match = True
-    
-            if is_match:
-                matched_obj_names.add(rec["name"])
-                if "group" in cat:
-                    if not any(g["name"] == rec["name"] for g in output["matched_groups"]):
-                        output["matched_groups"].append({"name": rec["name"], "category": rec["category"], "device": rec["device"], "data": rec["data"]})
-                else:
-                    if not any(o["name"] == rec["name"] for o in output["matched_objects"]):
-                        output["matched_objects"].append({"name": rec["name"], "category": rec["category"], "device": rec["device"], "data": rec["data"]})
-    
-        if source: matched_obj_names.add(source)
-        if destination: matched_obj_names.add(destination)
-    
-        group_map = {}
-        for rec in all_records:
-            if "address_groups" in rec["category"]:
-                g_data = rec["data"]
-                for k in ["static", "member"]:
-                    val = g_data.get(k, [])
-                    if isinstance(val, dict): val = val.get("member", [])
-                    if isinstance(val, str): val = [val]
-                    for m in val:
-                        if m:
-                            group_map.setdefault(str(m), set()).add(rec["name"])
-    
-        expanded_entities = set(matched_obj_names)
-        stack = list(matched_obj_names)
-        visited = set()
-        while stack:
-            curr = stack.pop()
-            if curr in visited:
-                continue
-            visited.add(curr)
-            parents = group_map.get(curr, set())
-            for p in parents:
-                expanded_entities.add(p)
-                stack.append(p)
-                for rec in all_records:
-                    if rec["name"] == p and "group" in rec["category"]:
-                        if not any(g["name"] == p for g in output["matched_groups"]):
-                            output["matched_groups"].append({"name": p, "category": rec["category"], "device": rec["device"], "data": rec["data"]})
-    
-        for rec in all_records:
-            if "security_rules" in rec["category"] or "nat_rules" in rec["category"]:
-                r_data = rec["data"]
-                r_name = rec["name"]
-                
-                def get_mems(field):
-                    f = r_data.get(field, {})
-                    m = f.get("member", []) if isinstance(f, dict) else f
-                    if isinstance(m, str): m = [m]
-                    return [str(x) for x in m if x]
-    
-                srcs = get_mems("source")
-                dsts = get_mems("destination")
-                srvs = get_mems("service")
-    
-                src_hit = not source or any(s.lower() in [e.lower() for e in expanded_entities] or match_query(s, source) for s in srcs)
-                dst_hit = not destination or any(d.lower() in [e.lower() for e in expanded_entities] or match_query(d, destination) for d in dsts)
-                port_hit = not port or any(match_query(p, port) for p in srvs) or "any" in [p.lower() for p in srvs]
-    
-                if src_hit and dst_hit and port_hit and (source or destination or port):
-                    output["matched_rules"].append({
-                        "device": rec["device"],
-                        "rule_name": r_name,
-                        "category": rec["category"],
-                        "sources": srcs,
-                        "destinations": dsts,
-                        "services": srvs,
-                        "data": r_data
-                    })
-    
-        return output
 
-DATA = InfrastructureDataSource()
+        objs = _dedupe((src or {}).get("matched_objects", []) + (dst or {}).get("matched_objects", []))
+        groups = _dedupe((src or {}).get("matched_groups", []) + (dst or {}).get("matched_groups", []))
+        matched = _dedupe(matched)
+        noisy = _dedupe((src or {}).get("all_entries_matches", []) + (dst or {}).get("all_entries_matches", []))[:50]
+        allow = sum(1 for r in matched if r.get("decision") == "ALLOWED")
+        deny = sum(1 for r in matched if r.get("decision") == "DENIED")
+        timing["total_ms"] = round((time.perf_counter() - total) * 1000, 2)
+        if source and destination:
+            search_scope = "source_and_destination"
+        elif source:
+            search_scope = "source_only"
+        else:
+            search_scope = "destination_only"
 
+        return {
+            "query": {"source": source, "destination": destination, "port": port},
+            "search_scope": search_scope,
+            "source_context": srcctx,
+            "destination_context": dstctx,
+            "matched_objects": objs,
+            "matched_groups": groups,
+            "matched_rules": matched,
+            "rules": matched,  # UI/backward compatibility
+            "all_entries_matches": noisy,
+            "timing": timing,
+            "summary": {"objects": len(objs), "groups": len(groups), "rules": len(matched), "allow": allow, "deny": deny},
+        }
+
+DATA=InfrastructureDataSource()
 
 @app.route("/")
-def index():
-    return render_template("index.html")
-
-
+def index():return render_template("index.html")
 @app.route("/api/info")
-def api_info():
-    return jsonify({"files": DATA.files_count(), "devices": DATA.devices_count()})
-
-
+def api_info():return jsonify({"files":DATA.files_count(),"devices":DATA.devices_count()})
 @app.route("/api/stats")
-def api_stats():
-    return jsonify(DATA.get_stats())
-
-
+def api_stats():return jsonify(DATA.get_stats())
 @app.route("/api/automation/status")
-def api_automation_status():
-    return jsonify({
-        "aws_org_mtime": get_file_modified_time(ORG_FILE_PATH),
-        "aws_data_mtime": get_latest_dir_mtime(AWS_DATA_ROOT),
-        "pan_org_mtime": get_file_modified_time(PAN_TOPOLOGY_PATH),
-        "pan_data_mtime": get_latest_dir_mtime(FW_DATA_ROOT),
-    })
-
+def api_status():return jsonify({"aws_org_mtime":get_file_modified_time(ORG_FILE_PATH),"aws_data_mtime":get_latest_dir_mtime(AWS_DATA_ROOT),"pan_org_mtime":get_file_modified_time(PAN_TOPOLOGY_PATH),"pan_data_mtime":get_latest_dir_mtime(FW_DATA_ROOT)})
+@app.route("/api/automation/results")
+def api_automation_results():
+    results = []
+    root = AUTOMATION_RESULTS_ROOT
+    if not root.exists():
+        return jsonify({"results": [], "directory": str(root), "exists": False})
+    for path in sorted(root.glob("*.json"), key=lambda x: x.name.lower()):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                continue
+            def get_key(name, default=""):
+                if name in payload: return payload.get(name, default)
+                wanted = name.lower()
+                for k, v in payload.items():
+                    if str(k).lower() == wanted: return v
+                return default
+            reserved = {"name", "status", "lastrun"}
+            extras = {str(k): v for k, v in payload.items() if str(k).lower() not in reserved}
+            results.append({
+                "file": path.name,
+                "name": get_key("Name", path.stem),
+                "status": get_key("Status", "Unknown"),
+                "lastrun": get_key("Lastrun", ""),
+                "extra": extras,
+            })
+        except Exception as exc:
+            results.append({"file": path.name, "name": path.stem, "status": "ERROR", "lastrun": "", "extra": {"Error": str(exc)}})
+    return jsonify({"results": results, "directory": str(root), "exists": True})
 
 @app.route("/api/topology/aws")
-def api_topology_aws():
-    if not ORG_FILE_PATH.exists():
-        return jsonify({"error": "AWS Organization Topology file not found."}), 404
-    try:
-        with ORG_FILE_PATH.open("r", encoding="utf-8") as handle:
-            return jsonify(json.load(handle))
-    except Exception as exc:
-        return jsonify({"error": f"Failed to read AWS Org topology file: {exc}"}), 500
-
-
+def api_top_aws():
+    if not ORG_FILE_PATH.exists():return jsonify({"error":"AWS Organization Topology file not found."}),404
+    try:return jsonify(json.loads(ORG_FILE_PATH.read_text(encoding="utf-8")))
+    except Exception as e:return jsonify({"error":str(e)}),500
 @app.route("/api/topology/pan")
-def api_topology_pan():
-    if not PAN_TOPOLOGY_PATH.exists():
-        return jsonify({"error": "Panorama Topology file not found."}), 404
-    try:
-        with PAN_TOPOLOGY_PATH.open("r", encoding="utf-8") as handle:
-            return jsonify(json.load(handle))
-    except Exception as exc:
-        return jsonify({"error": f"Failed to read Panorama topology file: {exc}"}), 500
-
-
+def api_top_pan():
+    if not PAN_TOPOLOGY_PATH.exists():return jsonify({"error":"Panorama Topology file not found."}),404
+    try:return jsonify(json.loads(PAN_TOPOLOGY_PATH.read_text(encoding="utf-8")))
+    except Exception as e:return jsonify({"error":str(e)}),500
 @app.route("/api/investigate")
 def api_investigate():
-    query = request.args.get("q", "").strip()
-    if not query:
-        return jsonify({"error": "A search query is required."}), 400
-    try:
-        return jsonify(DATA.investigate(query))
-    except Exception as exc:
-        app.logger.exception("Investigation failed")
-        return jsonify({"error": str(exc)}), 500
-
-
+    q=request.args.get("q","").strip()
+    if not q:return jsonify({"error":"A search query is required."}),400
+    try:return jsonify(DATA.investigate(q))
+    except Exception as e:app.logger.exception("Investigation failed");return jsonify({"error":str(e)}),500
 @app.route("/api/policy-lookup")
-def api_policy_lookup():
-    try:
-        rules = DATA.policy_lookup(
-            request.args.get("src", ""),
-            request.args.get("dst", ""),
-            request.args.get("port", ""),
-        )
-        return jsonify({"rules": rules})
-    except Exception as exc:
-        app.logger.exception("Policy lookup failed")
-        return jsonify({"error": str(exc)}), 500
-
-@app.route("/search_rules", methods=["GET"])
-def api_search_rules():
-    source = request.args.get("source", "").strip()
-    destination = request.args.get("destination", "").strip()
-    port = request.args.get("port", "").strip()
-    results = DATA.policy_lookup(source=source, destination=destination, port=port)
-    return jsonify(results)
-
+def api_policy():
+    try:return jsonify(DATA.policy_lookup(request.args.get("src",""),request.args.get("dst",""),request.args.get("port","")))
+    except Exception as e:app.logger.exception("Policy lookup failed");return jsonify({"error":str(e)}),500
 @app.route("/api/debug-records")
-def api_debug_records():
-    conn = get_db(DATA.db_file)
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT platform, category FROM records")
-    categories = cursor.fetchall()
-    
-    cursor.execute("SELECT device_id, platform, category, name, SUBSTR(data, 1, 150) FROM records WHERE platform='panos' LIMIT 5")
-    sample_panos = cursor.fetchall()
-    conn.close()
-    
-    return jsonify({
-        "available_categories": [dict(row) for row in categories],
-        "sample_panos_records": [dict(row) for row in sample_panos]
-    })
-
-def main() -> None:
-    global DB_PATH, FW_DATA_ROOT, AWS_DATA_ROOT, ORG_FILE_PATH, PAN_TOPOLOGY_PATH, DATA
-
-    parser = argparse.ArgumentParser(description="Infrastructure Intelligence Dashboard")
-    parser.add_argument("--db", default=str(DB_PATH), help="Path to SQLite database")
-    parser.add_argument("--firewall-data", default=str(FW_DATA_ROOT), help="Path to parsed Firewall JSON folder")
-    parser.add_argument("--aws-data", default=str(AWS_DATA_ROOT), help="Path to parsed AWS JSON folder")
-    parser.add_argument("--org-file", default=str(ORG_FILE_PATH), help="Path to AWS Org topology JSON file")
-    parser.add_argument("--pan-file", default=str(PAN_TOPOLOGY_PATH), help="Path to Panorama topology JSON file")
-    parser.add_argument("--port", type=int, default=8080, help="Web server port")
-    parser.add_argument("--host", default="0.0.0.0", help="Web server bind address")
-    args = parser.parse_args()
-
-    DB_PATH = Path(args.db).resolve()
-    FW_DATA_ROOT = Path(args.firewall_data).resolve()
-    AWS_DATA_ROOT = Path(args.aws_data).resolve()
-    ORG_FILE_PATH = Path(args.org_file).resolve()
-    PAN_TOPOLOGY_PATH = Path(args.pan_file).resolve()
-    DATA = InfrastructureDataSource(DB_PATH)
-
-    print(f"[*] Starting web server on http://localhost:{args.port}/")
-    print(f"[*] Database: {DB_PATH}")
-    print("[*] Source JSON is NOT ingested by app.py; run ingest.py when source data changes.")
-    app.run(host=args.host, port=args.port, debug=False)
+def api_debug():
+    c=get_db(DATA.db_file)
+    try:return jsonify({"categories":[dict(r) for r in c.execute("SELECT platform,category,COUNT(*) count FROM records GROUP BY platform,category ORDER BY platform,category")]})
+    finally:c.close()
 
 
-if __name__ == "__main__":
-    main()
+def main():
+    global DB_PATH,FW_DATA_ROOT,AWS_DATA_ROOT,ORG_FILE_PATH,PAN_TOPOLOGY_PATH,DATA
+    p=argparse.ArgumentParser(description="Infrastructure Intelligence Dashboard")
+    p.add_argument("--db",default=str(DB_PATH));p.add_argument("--firewall-data",default=str(FW_DATA_ROOT));p.add_argument("--aws-data",default=str(AWS_DATA_ROOT));p.add_argument("--org-file",default=str(ORG_FILE_PATH));p.add_argument("--pan-file",default=str(PAN_TOPOLOGY_PATH));p.add_argument("--port",type=int,default=8080);p.add_argument("--host",default="0.0.0.0");p.add_argument("--debug",action="store_true")
+    a=p.parse_args();DB_PATH=Path(a.db).resolve();FW_DATA_ROOT=Path(a.firewall_data).resolve();AWS_DATA_ROOT=Path(a.aws_data).resolve();ORG_FILE_PATH=Path(a.org_file).resolve();PAN_TOPOLOGY_PATH=Path(a.pan_file).resolve();DATA=InfrastructureDataSource(DB_PATH)
+    print(f"[*] Starting web server on http://localhost:{a.port}/");print(f"[*] Database: {DB_PATH}");print("[*] app.py does not ingest. Run ingest.py when parsed JSON changes.")
+    app.run(host=a.host,port=a.port,debug=a.debug)
+if __name__=="__main__":main()
