@@ -1,142 +1,149 @@
 #!/usr/bin/env python3
-"""
-AWS Organization Discovery Script
---------------------------------
-Iterates through the AWS Organization structure, finding all OUs,
-parents, and active member accounts, saving output as a structured JSON.
+"""Collect AWS Organizations topology, account tags, and normalized owner fields.
 
-Run:
-    python find_awsou_dashboard.py --output org_topology.json
+The output intentionally keeps the existing topology shape (Hierarchy/OUs/Accounts)
+while adding Tags, PrimaryOwner, and SecondaryOwner to every account.
 """
-
 from __future__ import annotations
+
 import argparse
 import json
-from datetime import datetime
 from pathlib import Path
+from typing import Any
+
 import boto3
 from botocore.exceptions import ClientError
 
-def get_ou_hierarchy(client, parent_id, parent_path="Root"):
-    """Recursively fetch OUs and accounts under a parent ID (Root or OU)."""
-    node = {
-        "OUs": [],
-        "Accounts": []
+
+def paginate(client, operation: str, result_key: str, **kwargs):
+    paginator = client.get_paginator(operation)
+    for page in paginator.paginate(**kwargs):
+        yield from page.get(result_key, [])
+
+
+def get_tags(client, resource_id: str) -> dict[str, str]:
+    tags: dict[str, str] = {}
+    try:
+        token = None
+        while True:
+            params = {"ResourceId": resource_id}
+            if token:
+                params["NextToken"] = token
+            response = client.list_tags_for_resource(**params)
+            for tag in response.get("Tags", []):
+                key = str(tag.get("Key", "")).strip()
+                if key:
+                    tags[key] = str(tag.get("Value", ""))
+            token = response.get("NextToken")
+            if not token:
+                break
+    except ClientError as exc:
+        print(f"[!] Could not read tags for account {resource_id}: {exc}")
+    return tags
+
+
+def tag_value(tags: dict[str, str], preferred: str, aliases: list[str]) -> str:
+    wanted = [preferred, *aliases]
+    lowered = {k.lower(): v for k, v in tags.items()}
+    for key in wanted:
+        value = lowered.get(key.lower())
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def account_record(account: dict[str, Any], org_client, primary_key: str, secondary_key: str) -> dict[str, Any]:
+    record = dict(account)
+    account_id = str(record.get("Id", ""))
+    tags = get_tags(org_client, account_id) if account_id else {}
+
+    # Keep all raw account tags and also expose normalized owner fields for the UI.
+    record["Tags"] = tags
+    record["PrimaryOwner"] = tag_value(
+        tags,
+        primary_key,
+        ["PrimaryOwner", "Primary-Owner", "OwnerPrimary", "Owner-Primary", "primary_owner"],
+    )
+    record["SecondaryOwner"] = tag_value(
+        tags,
+        secondary_key,
+        ["SecondaryOwner", "Secondary-Owner", "OwnerSecondary", "Owner-Secondary", "secondary_owner"],
+    )
+    return record
+
+
+def build_ou(org_client, parent_id: str, primary_key: str, secondary_key: str) -> list[dict[str, Any]]:
+    output = []
+    for ou in paginate(org_client, "list_organizational_units_for_parent", "OrganizationalUnits", ParentId=parent_id):
+        node = {
+            "Name": ou.get("Name", ""),
+            "Id": ou.get("Id", ""),
+            "Arn": ou.get("Arn", ""),
+            "Type": "OU",
+            "Accounts": [],
+            "OUs": [],
+        }
+        for account in paginate(org_client, "list_accounts_for_parent", "Accounts", ParentId=ou["Id"]):
+            node["Accounts"].append(account_record(account, org_client, primary_key, secondary_key))
+        node["OUs"] = build_ou(org_client, ou["Id"], primary_key, secondary_key)
+        output.append(node)
+    return output
+
+
+def collect(primary_key: str, secondary_key: str) -> dict[str, Any]:
+    org = boto3.client("organizations")
+    roots = list(paginate(org, "list_roots", "Roots"))
+    hierarchy = []
+
+    for root in roots:
+        node = {
+            "Name": root.get("Name", "Root"),
+            "Id": root.get("Id", ""),
+            "Arn": root.get("Arn", ""),
+            "Type": "ROOT",
+            "Accounts": [],
+            "OUs": [],
+        }
+        for account in paginate(org, "list_accounts_for_parent", "Accounts", ParentId=root["Id"]):
+            node["Accounts"].append(account_record(account, org, primary_key, secondary_key))
+        node["OUs"] = build_ou(org, root["Id"], primary_key, secondary_key)
+        hierarchy.append(node)
+
+    return {
+        "Hierarchy": hierarchy,
+        "Metadata": {
+            "PrimaryOwnerTag": primary_key,
+            "SecondaryOwnerTag": secondary_key,
+            "AccountTagsCollected": True,
+        },
     }
 
-    # 1. Fetch Accounts directly under this parent
-    try:
-        paginator = client.get_paginator("list_accounts_for_parent")
-        for page in paginator.paginate(ParentId=parent_id):
-            for acc in page.get("Accounts", []):
-                node["Accounts"].append({
-                    "Id": acc["Id"],
-                    "Arn": acc["Arn"],
-                    "Name": acc["Name"],
-                    "Email": acc["Email"],
-                    "Status": acc.get("Status"),
-                    "JoinedMethod": acc.get("JoinedMethod"),
-                    "ParentPath": parent_path
-                })
-    except ClientError as e:
-        print(f"[!] Error listing accounts for parent {parent_id}: {e}")
 
-    # 2. Fetch Child OUs and recursively process them
-    try:
-        paginator = client.get_paginator("list_organizational_units_for_parent")
-        for page in paginator.paginate(ParentId=parent_id):
-            for ou in page.get("OrganizationalUnits", []):
-                ou_id = ou["Id"]
-                ou_name = ou["Name"]
-                current_path = f"{parent_path} / {ou_name}"
-                
-                # Retrieve full nested dictionary for child OU
-                child_ou = get_ou_hierarchy(client, ou_id, current_path)
-                child_ou["Id"] = ou_id
-                child_ou["Name"] = ou_name
-                child_ou["Path"] = current_path
-                
-                node["OUs"].append(child_ou)
-    except ClientError as e:
-        print(f"[!] Error listing OUs for parent {parent_id}: {e}")
-
-    return node
-
-def count_all_accounts(node):
-    """Recursively count all active/total accounts found in the hierarchy tree."""
-    count = len(node.get("Accounts", []))
-    for ou in node.get("OUs", []):
-        count += count_all_accounts(ou)
-    return count
-
-def main():
-    parser = argparse.ArgumentParser(description="Export AWS Org Structure to JSON")
-    parser.add_argument("--output", default="org_topology.json", help="Output JSON filename")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Collect AWS Organization topology and account tags")
+    parser.add_argument("--output", default="org_topology.json", help="Output JSON path")
+    parser.add_argument("--primary-owner-tag", default="PrimaryOwner", help="Primary owner tag key")
+    parser.add_argument("--secondary-owner-tag", default="SecondaryOwner", help="Secondary owner tag key")
     args = parser.parse_args()
 
-    success = True
-    accounts_found_count = 0
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    output = Path(args.output).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    data = collect(args.primary_owner_tag, args.secondary_owner_tag)
+    output.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
 
-    client = boto3.client("organizations")
+    accounts = []
+    def walk(node: dict[str, Any]):
+        accounts.extend(node.get("Accounts", []))
+        for child in node.get("OUs", []):
+            walk(child)
+    for root in data["Hierarchy"]:
+        walk(root)
 
-    print("[*] Verifying AWS Organization access...")
-    try:
-        org_desc = client.describe_organization()["Organization"]
-    except ClientError as e:
-        print(f"[X] Failed to access AWS Organizations. Ensure you are running from the Management Account. Error: {e}")
-        success = False
-        org_desc = {}
+    print(f"[+] Wrote {output}")
+    print(f"[+] Accounts: {len(accounts)}")
+    print(f"[+] Accounts with primary owner: {sum(bool(a.get('PrimaryOwner')) for a in accounts)}")
+    print(f"[+] Accounts with secondary owner: {sum(bool(a.get('SecondaryOwner')) for a in accounts)}")
 
-    if success:
-        try:
-            # Find Root ID
-            roots = client.list_roots()["Roots"]
-            root_id = roots[0]["Id"]
-            root_name = roots[0]["Name"]
-
-            print(f"[*] Building Organization Tree from Root: {root_name} ({root_id})...")
-            
-            # Process Root node hierarchy
-            root_hierarchy = get_ou_hierarchy(client, root_id, parent_path=root_name)
-            root_hierarchy["Id"] = root_id
-            root_hierarchy["Name"] = root_name
-            root_hierarchy["Path"] = root_name
-
-            accounts_found_count = count_all_accounts(root_hierarchy)
-
-            org_tree = {
-                "OrganizationId": org_desc.get("Id"),
-                "MasterAccountArn": org_desc.get("MasterAccountArn"),
-                "MasterAccountId": org_desc.get("MasterAccountId"),
-                "RootId": root_id,
-                "RootName": root_name,
-                "Hierarchy": root_hierarchy
-            }
-
-            with open(args.output, "w", encoding="utf-8") as f:
-                json.dump(org_tree, f, indent=2, default=str)
-
-            print(f"[+] Organization topology successfully written to {args.output}")
-        except Exception as e:
-            print(f"[X] Error occurred during organization discovery: {e}")
-            success = False
-
-    # Write automation results status file
-    automation_dir = Path("automation_results")
-    automation_dir.mkdir(parents=True, exist_ok=True)
-    
-    result_payload = {
-        "Name": "AWS Organization Discovery",
-        "Status": "Successful" if success else "Failed",
-        "Lastrun": timestamp,
-        "AccountsFound": accounts_found_count
-    }
-
-    result_file = automation_dir / "find_awsou_dashboard_status.json"
-    with open(result_file, "w", encoding="utf-8") as rf:
-        json.dump(result_payload, rf, indent=2)
-    print(f"[+] Automation run status saved to {result_file}")
 
 if __name__ == "__main__":
     main()
