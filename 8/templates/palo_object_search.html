@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Palo Alto Object Search — PerDef Security Orchestrator{% endblock %}
+{% block content %}
+<div class="page-content">
+  <div class="beta-banner">🔎 <b>Palo Alto: Object Search:</b> Search authoritative Panorama objects and groups by name or their relevant values.</div>
+
+  <div class="section object-search-panel">
+    <div class="section-title">
+      <h2>Palo Alto Object Search</h2>
+      <span class="count">{{ {'addresses':'Addresses / Address Groups','services':'Services / Service Groups','applications':'Applications','custom_urls':'Custom URLs'}[kind] }}</span>
+    </div>
+
+    <div class="object-tabs">
+      {% for k,label in [('addresses','Addresses / Address Groups'),('services','Services / Service Groups'),('applications','Applications'),('custom_urls','Custom URLs')] %}
+      <a class="object-tab {% if kind == k %}active{% endif %}" href="{{ url_for('palo_object_search_page', kind=k) }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+
+    <form class="object-search-form" method="get" action="{{ url_for('palo_object_search_page') }}">
+      <input type="hidden" name="kind" value="{{ kind }}">
+      <input name="q" value="{{ query }}"
+             placeholder="{% if kind == 'addresses' %}Object name, partial IP/CIDR (e.g. 10.5.2){% elif kind == 'services' %}Service name or exact port (e.g. 443){% elif kind == 'applications' %}Application name or exact port{% else %}Custom URL name or FQDN substring{% endif %}"
+             autocomplete="off" autofocus>
+      <button type="submit">Search</button>
+      <a class="button secondary" href="{{ url_for('palo_object_search_page', kind=kind) }}">Clear</a>
+    </form>
+
+    <div class="object-search-help">
+      {% if kind == 'addresses' %}
+        <b>Address search:</b> names use partial matching. IP/CIDR input also uses partial-prefix matching, so <code>10.5.2</code> finds indexed values beginning with that prefix.
+      {% elif kind == 'services' %}
+        <b>Service search:</b> names use partial matching. Numeric searches match the service port exactly (including a port contained in a configured range).
+      {% elif kind == 'applications' %}
+        <b>Application search:</b> names use partial matching. Numeric searches match configured/default application ports exactly where those ports exist in the dataset.
+      {% else %}
+        <b>Custom URL search:</b> names use partial matching and URL/FQDN values use substring matching, so partial domains work without needing the full FQDN.
+      {% endif %}
+    </div>
+  </div>
+
+  {% if result_html %}
+    {{ result_html }}
+  {% elif query %}
+    <div class="empty">No matching objects found.</div>
+  {% else %}
+    <div class="section object-search-intro">
+      <div class="section-title"><h2>How this search works</h2></div>
+      <div class="object-search-examples">
+        <div><b>Name:</b> search <code>prod</code> to return objects/groups whose names contain <code>prod</code>.</div>
+        <div><b>Address:</b> search <code>10.5.2</code> for matching IP/CIDR prefixes.</div>
+        <div><b>Service:</b> search <code>443</code> for port 443, not 443/800/8000.</div>
+        <div><b>Custom URL:</b> search <code>example.com</code> to find FQDN/URL values containing it.</div>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
