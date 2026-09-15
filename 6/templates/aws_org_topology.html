@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}AWS Org Topology — PerDef Security Orchestrator{% endblock %}
+{% block content %}
+<div class="section">
+ <div class="section-title"><h2>AWS Organization Hierarchy</h2><span class="count">{{ org_meta }}</span></div>
+ <div style="padding:12px 20px;border-bottom:1px solid var(--border-color);background:#2f3036;display:flex;justify-content:space-between;align-items:center;">
+   <span style="font-size:13px;color:var(--text-secondary);">Quick Access:</span>
+   <a href="https://aws.amazon.com/console/" target="_blank" rel="noopener" class="switch-link" style="font-size:13px;">🔗 Open Main AWS Console Login →</a>
+ </div>
+ <div style="padding:16px 20px;border-bottom:1px solid var(--border-color);background:var(--bg-surface);">
+   <form class="form-inline" method="get" action="{{ url_for('aws_org_page') }}">
+     <label for="crossRoleInput" style="font-size:13px;font-weight:600;color:var(--text-secondary);">Cross-Account Role Name:</label>
+     <input id="crossRoleInput" name="role" type="text" value="{{ role }}" placeholder="e.g. OrganizationAccountAccessRole or SecurityAdmin" style="height:36px;width:320px;">
+     <button type="submit">Apply Role</button>
+     <a class="button secondary" href="{{ url_for('aws_org_page') }}">Clear</a>
+     <small style="color:var(--text-secondary);">Populating this makes AWS account IDs clickable direct Switch-Role links.</small>
+   </form>
+ </div>
+ <div style="padding:20px;" class="org-tree">
+ {% if org_error %}<div class="empty">{{ org_error }}</div>{% elif org_tree %}{{ org_tree }}{% else %}<div class="empty">No organization topology hierarchy nodes found.</div>{% endif %}
+ </div>
+</div>
+{% endblock %}
