@@ -105,3 +105,36 @@ query {
     }
   }
 }
+
+
+query {
+  issuesV2(first: 10) {
+    nodes {
+      id
+      status
+      severity
+
+      control {
+        id
+        name
+      }
+
+      entitySnapshot {
+        id
+        type
+        nativeType
+        name
+        cloudPlatform
+        providerId
+        externalId
+        region
+        cloudProviderURL
+      }
+    }
+
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
