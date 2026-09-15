@@ -1,0 +1,107 @@
+query {
+  issuesV2(
+    first: 10
+  ) {
+    nodes {
+      id
+      createdAt
+      updatedAt
+      status
+      severity
+      type
+
+      control {
+        id
+        name
+        description
+        resolutionRecommendation
+      }
+
+      sourceRule {
+        id
+        name
+      }
+
+      entitySnapshot {
+        id
+        type
+        nativeType
+        name
+        cloudPlatform
+        cloudProviderURL
+        providerId
+        region
+        externalId
+        resourceGroupExternalId
+        subscriptionExternalId
+        subscriptionName
+      }
+
+      project {
+        id
+        name
+        slug
+      }
+    }
+
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+
+
+
+
+
+query {
+  issuesV2(
+    first: 100
+    filterBy: {
+      status: [OPEN]
+    }
+  ) {
+    nodes {
+      id
+      createdAt
+      updatedAt
+      status
+      severity
+      type
+
+      control {
+        id
+        name
+        description
+        resolutionRecommendation
+      }
+
+      sourceRule {
+        id
+        name
+      }
+
+      entitySnapshot {
+        id
+        type
+        nativeType
+        name
+        cloudPlatform
+        cloudProviderURL
+        providerId
+        region
+        externalId
+        resourceGroupExternalId
+        subscriptionExternalId
+        subscriptionName
+        tags
+      }
+    }
+
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
