@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Automation Results — PerDef Security Orchestrator{% endblock %}
+{% block content %}
+<div class="section">
+ <div class="section-title"><h2>Automation Results</h2><span class="count">{{ automation_results|length }} Result{% if automation_results|length != 1 %}s{% endif %}</span></div>
+ <div style="padding:20px;">
+  <div class="hint" style="margin-bottom:14px;">JSON files from <code>./automation_results</code> are displayed automatically. Add as many automation result files as needed; each file becomes one result card.</div>
+  {% if automation_results %}
+  <div class="status-grid">
+   {% for x in automation_results %}
+   {% set status=x.status|string %}
+   {% set success = status|lower in ['success','complete','completed','ok','passed'] %}
+   {% set danger = 'fail' in status|lower or 'error' in status|lower %}
+   <div class="status-card">
+    <div class="status-card-header"><span class="status-title">{{ x.name }}</span><span class="status-pill {% if success %}success{% elif danger %}danger{% else %}neutral{% endif %}">{{ status }}</span></div>
+    <div class="meta"><b>Last Run:</b> {{ x.lastrun or 'Not provided' }}</div>
+    <div class="meta"><b>JSON:</b> {{ x.file }}</div>
+    {% if x.extra %}<div class="automation-extra">{% for k,v in x.extra.items() %}<div class="meta"><b>{{ k }}:</b> {% if v is mapping or v is sequence and v is not string %}{{ v|tojson }}{% else %}{{ v }}{% endif %}</div>{% endfor %}</div>{% endif %}
+   </div>
+   {% endfor %}
+  </div>
+  {% else %}<div class="empty">No automation result JSON files found in <code>./automation_results</code>.</div>{% endif %}
+ </div>
+</div>
+{% endblock %}
+

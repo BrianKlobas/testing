@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}PerDef Security Orchestrator{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<div class="sidebar">
+    <div class="brand">
+        <div class="logo">🔒</div>
+        <div><h1>PerDef Security Orchestrator</h1><small>Unified Security Dashboard</small></div>
+    </div>
+    <div class="nav-menu">
+        <a class="tab-btn {% if active_page == 'search' %}active{% endif %}" href="{{ url_for('search_page') }}">🔍 Search &amp; Investigate</a>
+        <a class="tab-btn {% if active_page == 'policy' %}active{% endif %}" href="{{ url_for('policy_lookup_page') }}">🛡️ Firewall Policy Lookup</a>
+        <a class="tab-btn {% if active_page == 'org' %}active{% endif %}" href="{{ url_for('aws_org_page') }}">🏢 AWS Org Topology</a>
+        <a class="tab-btn {% if active_page == 'wiz' %}active{% endif %}" href="{{ url_for('wiz_policy_check_page') }}">🔐 Wiz Policy Check</a>
+        <a class="tab-btn {% if active_page == 'automation' %}active{% endif %}" href="{{ url_for('automation_page') }}">⚙️ Automation Results</a>
+        <a class="tab-btn {% if active_page == 'info' %}active{% endif %}" href="{{ url_for('information_page') }}">ℹ️ Information &amp; Links</a>
+        <div class="nav-spacer"></div>
+        <a class="tab-btn {% if active_page == 'about' %}active{% endif %}" href="{{ url_for('about_page') }}">ℹ️ About / Site Info</a>
+    </div>
+    <div class="sidebar-footer">
+        <div><b>Database:</b> {{ db_files }} items | {{ db_devices }} devices</div>
+    </div>
+</div>
+<div class="main-wrapper">
+{% block content %}{% endblock %}
+</div>
+</body>
+</html>

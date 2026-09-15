@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Information & Links — PerDef Security Orchestrator{% endblock %}
+{% block content %}
+
+        <div class="section">
+            <div class="section-title">
+                <h2>Useful Links & Infrastructure Portals</h2>
+            </div>
+            <div style="padding: 20px;">
+                <div class="info-grid">
+                    <!-- Column 1: Systems & Tools -->
+                    <div>
+                        <div class="link-column-title">🛠️ System & Tool Portals</div>
+
+                        <div class="link-card">
+                            <h4>Splunk Enterprise Log Management</h4>
+                            <p>Centralized SIEM log search, firewall traffic analysis, and SOC alerts.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">Open Splunk &rarr; — Configure internal Splunk URL in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AWS Management Console</h4>
+                            <p>Direct SSO portal access for cloud tenant administration and EC2 management.</p>
+                            <a href="https://aws.amazon.com/console/" target="_blank">Open AWS Console &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Palo Alto Panorama Portal</h4>
+                            <p>Centralized firewall policy manager, security profile configuration, and rule inspection.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">Open Panorama &rarr; — Configure Panorama URL in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Microsoft Azure Portal</h4>
+                            <p>Cloud tenant administration, VNets, and Enterprise application management.</p>
+                            <a href="https://portal.azure.com" target="_blank">Open Azure Portal &rarr;</a>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Infoblox IPAM & Grid Manager</h4>
+                            <p>Enterprise IP Address Management, DNS zone administrative panel, and DHCP scopes.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">Open Infoblox &rarr; — Configure Infoblox URL in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Wiz Cloud Security Platform</h4>
+                            <p>Cloud Security Posture Management (CSPM), vulnerability management, and risk graphs.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">Open Wiz &rarr; — Configure Wiz URL in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AlgoSec Firewall Analyzer</h4>
+                            <p>Automated security policy analysis, change management, and firewall rule cleanup.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">Open AlgoSec &rarr; — Configure AlgoSec URL in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Akamai Control Center</h4>
+                            <p>Edge Security, Web Application Firewall (WAF) rule tuning, and CDN management.</p>
+                            <a href="https://control.akamai.com" target="_blank">Open Akamai Portal &rarr;</a>
+                        </div>
+                    </div>
+
+                    <!-- Column 2: General & Information -->
+                    <div>
+                        <div class="link-column-title">📚 General & Information Links</div>
+
+                        <div class="link-card">
+                            <h4>ServiceNow Portal</h4>
+                            <p>Enterprise IT Service Management for submitting security requests and incidents.</p>
+                            <div class="sub-links">
+                                <span class="meta" style="display:inline-block;margin-top:6px;">🔥 Firewall Request — Configure FW Request URL</span>
+                                <span class="meta" style="display:inline-block;margin-top:6px;">🌐 Proxy Request — Configure Proxy Request URL</span>
+                                <span class="meta" style="display:inline-block;margin-top:6px;">🛡️ Security Tab — Configure Security Tab URL</span>
+                            </div>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Security Standards & Compliance</h4>
+                            <p>Corporate baseline security policies, hardening standards, and governance rules.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">View Security Standards &rarr; — Configure documentation link in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Network Documentation</h4>
+                            <p>High-level architectural diagrams, VLAN mapping tables, and routing policies.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">View Network Docs &rarr; — Configure documentation link in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>On-Premise Network Diagrams</h4>
+                            <p>Data center topologies, core distribution layer Visio maps, and edge WAN layouts.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">View On-Prem Diagrams &rarr; — Configure diagram link in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>AWS Architecture Diagrams</h4>
+                            <p>Transit Gateway layouts, VPC peering maps, and cross-account network designs.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">View AWS Diagrams &rarr; — Configure AWS diagram link in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Azure Architecture Diagrams</h4>
+                            <p>Hub-and-Spoke topology diagrams, Azure ExpressRoute connections, and Virtual WAN maps.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">View Azure Diagrams &rarr; — Configure Azure diagram link in script.</span>
+                        </div>
+
+                        <div class="link-card">
+                            <h4>Run Books & Operational Procedures</h4>
+                            <p>Step-by-step procedures for standard infrastructure operations, failovers, and emergency changes.</p>
+                            <span class="meta" style="display:inline-block;margin-top:6px;">View Run Books &rarr; — Configure Runbooks link in script.</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+{% endblock %}
+
