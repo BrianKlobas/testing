@@ -1,0 +1,20 @@
+{
+  "SchemaVersion": "1.0",
+  "Name": "AWS Security Group Compliance Check",
+  "Status": "Success",
+  "RunId": "8d0d2f0e-2a7d-4d83-a6f3-3fdb9e7e2d8a",
+  "Started": "2026-09-24T16:00:12Z",
+  "Completed": "2026-09-24T16:04:41Z",
+  "Lastrun": "2026-09-24T16:04:41Z",
+  "DurationSeconds": 269,
+  "Summary": "Checked AWS Security Groups across the organization.",
+  "Metrics": {
+    "AccountsChecked": 412,
+    "SecurityGroupsChecked": 18473,
+    "Violations": 37,
+    "Errors": 0
+  },
+  "Violations": 37,
+  "AccountsProcessed": 412,
+  "OutputFile": "sg_compliance_2026-09-24.json"
+}

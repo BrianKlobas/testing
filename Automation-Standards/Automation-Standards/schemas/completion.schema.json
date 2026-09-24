@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/automation-standards/completion.schema.json",
+  "title": "Automation Completion Result",
+  "type": "object",
+  "required": ["Name", "Status", "Lastrun"],
+  "properties": {
+    "SchemaVersion": {"type": "string"},
+    "Name": {"type": "string", "minLength": 1},
+    "Status": {"type": "string", "enum": ["Success", "Partial", "Failed"]},
+    "RunId": {"type": "string", "minLength": 1},
+    "Started": {"type": "string", "format": "date-time"},
+    "Completed": {"type": "string", "format": "date-time"},
+    "Lastrun": {"type": "string", "format": "date-time"},
+    "DurationSeconds": {"type": "number", "minimum": 0},
+    "Summary": {"type": "string"},
+    "Error": {"type": "object"},
+    "Metrics": {"type": "object"},
+    "HistoryKey": {"type": "string"},
+    "Rerun": {"type": "object"}
+  },
+  "additionalProperties": true
+}
