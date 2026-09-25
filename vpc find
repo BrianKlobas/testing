@@ -25,8 +25,8 @@ REGIONS = [
 
 OUTPUT_FILE = "aws_vpc_cidr_inventory.xlsx"
 
-# Tune this
-MAX_WORKERS = 25
+# 50 concurrent AWS operations
+MAX_WORKERS = 50
 
 
 # ==========================================================
@@ -46,6 +46,7 @@ sts = session.client("sts")
 lock = threading.Lock()
 
 completed = 0
+total_tasks = 0
 
 
 # ==========================================================
@@ -68,7 +69,6 @@ def list_accounts():
                 accounts.append(account)
 
     return accounts
-
 
 
 # ==========================================================
@@ -101,18 +101,20 @@ def get_name_tag(tags):
         return ""
 
     for tag in tags:
+
         if tag["Key"] == "Name":
             return tag["Value"]
 
     return ""
 
 
-
 # ==========================================================
 # Worker
+#
+# One worker = ONE account + ONE region
 # ==========================================================
 
-def scan_account(account):
+def scan_account_region(account, acct_session, region):
 
     global completed
 
@@ -120,73 +122,95 @@ def scan_account(account):
 
     try:
 
-        acct_session = assume_role(
-            account["Id"]
+        ec2 = acct_session.client(
+            "ec2",
+            region_name=region
         )
 
+        response = ec2.describe_vpcs()
 
-        for region in REGIONS:
+        vpcs = response.get("Vpcs", [])
 
-            try:
 
-                ec2 = acct_session.client(
-                    "ec2",
-                    region_name=region
+        for vpc in vpcs:
+
+            vpc_name = get_name_tag(
+                vpc.get("Tags")
+            )
+
+
+            # --------------------------------------------------
+            # IPv4
+            # --------------------------------------------------
+
+            for cidr in vpc.get(
+                "CidrBlockAssociationSet",
+                []
+            ):
+
+                cidr_block = cidr.get(
+                    "CidrBlock"
                 )
 
-                vpcs = ec2.describe_vpcs()["Vpcs"]
+                if cidr_block:
+
+                    rows.append([
+                        account["Name"],
+                        account["Id"],
+                        region,
+                        vpc_name,
+                        vpc["VpcId"],
+                        "IPv4",
+                        cidr_block,
+                        vpc["State"],
+                        vpc["IsDefault"],
+                    ])
 
 
-                for vpc in vpcs:
+            # --------------------------------------------------
+            # IPv6
+            # --------------------------------------------------
 
-                    vpc_name = get_name_tag(
-                        vpc.get("Tags")
-                    )
+            for cidr in vpc.get(
+                "Ipv6CidrBlockAssociationSet",
+                []
+            ):
 
+                ipv6_cidr = cidr.get(
+                    "Ipv6CidrBlock"
+                )
 
-                    for cidr in vpc.get(
-                        "CidrBlockAssociationSet",
-                        []
-                    ):
+                if ipv6_cidr:
 
-                        rows.append([
-                            account["Name"],
-                            account["Id"],
-                            region,
-                            vpc_name,
-                            vpc["VpcId"],
-                            "IPv4",
-                            cidr["CidrBlock"],
-                            vpc["State"],
-                            vpc["IsDefault"],
-                        ])
-
-
-
-                    for cidr in vpc.get(
-                        "Ipv6CidrBlockAssociationSet",
-                        []
-                    ):
-
-                        if cidr.get(
-                            "Ipv6CidrBlock"
-                        ):
-
-                            rows.append([
-                                account["Name"],
-                                account["Id"],
-                                region,
-                                vpc_name,
-                                vpc["VpcId"],
-                                "IPv6",
-                                cidr["Ipv6CidrBlock"],
-                                vpc["State"],
-                                vpc["IsDefault"],
-                            ])
+                    rows.append([
+                        account["Name"],
+                        account["Id"],
+                        region,
+                        vpc_name,
+                        vpc["VpcId"],
+                        "IPv6",
+                        ipv6_cidr,
+                        vpc["State"],
+                        vpc["IsDefault"],
+                    ])
 
 
-            except ClientError:
-                continue
+    except ClientError as e:
+
+        # Keep errors in the spreadsheet instead of
+        # killing the entire scan.
+
+        rows.append([
+            account["Name"],
+            account["Id"],
+            region,
+            "",
+            "",
+            "",
+            f"AWS ERROR: {e}",
+            "",
+            "",
+        ])
 
 
     except Exception as e:
@@ -194,27 +218,29 @@ def scan_account(account):
         rows.append([
             account["Name"],
             account["Id"],
-            "ERROR",
+            region,
             "",
             "",
             "",
-            str(e),
+            f"ERROR: {e}",
             "",
             "",
         ])
 
 
-
     with lock:
+
         completed += 1
+
         print(
-            f"[{completed}/{TOTAL_ACCOUNTS}] "
-            f"{account['Name']}"
+            f"[{completed}/{total_tasks}] "
+            f"{account['Name']} "
+            f"({account['Id']}) "
+            f"{region}"
         )
 
 
     return rows
-
 
 
 # ==========================================================
@@ -225,39 +251,131 @@ accounts = list_accounts()
 
 TOTAL_ACCOUNTS = len(accounts)
 
+total_tasks = TOTAL_ACCOUNTS * len(REGIONS)
+
+print()
 print(
     f"Scanning {TOTAL_ACCOUNTS} accounts "
-    f"with {MAX_WORKERS} workers..."
+    f"x {len(REGIONS)} regions "
+    f"= {total_tasks} account/region scans"
 )
+
+print(
+    f"Using {MAX_WORKERS} concurrent workers..."
+)
+
+print()
 
 
 all_rows = []
 
+
+# ==========================================================
+# Assume roles once per account
+#
+# This avoids doing STS AssumeRole 5 times per account.
+# ==========================================================
+
+account_sessions = {}
+
+print("Assuming roles...")
+
+for account in accounts:
+
+    try:
+
+        account_sessions[account["Id"]] = (
+            assume_role(account["Id"])
+        )
+
+    except Exception as e:
+
+        print(
+            f"WARNING: Could not assume role into "
+            f"{account['Name']} ({account['Id']}): {e}"
+        )
+
+print(
+    f"Successfully assumed roles into "
+    f"{len(account_sessions)}/{TOTAL_ACCOUNTS} accounts."
+)
+
+print()
+
+
+# ==========================================================
+# Build account/region tasks
+# ==========================================================
+
+tasks = []
+
+for account in accounts:
+
+    acct_session = account_sessions.get(
+        account["Id"]
+    )
+
+    if not acct_session:
+        continue
+
+    for region in REGIONS:
+
+        tasks.append(
+            (
+                account,
+                acct_session,
+                region
+            )
+        )
+
+
+total_tasks = len(tasks)
+
+
+# ==========================================================
+# Run concurrent scans
+# ==========================================================
 
 with ThreadPoolExecutor(
     max_workers=MAX_WORKERS
 ) as executor:
 
     futures = [
+
         executor.submit(
-            scan_account,
-            account
+            scan_account_region,
+            account,
+            acct_session,
+            region
         )
-        for account in accounts
+
+        for account, acct_session, region
+        in tasks
     ]
 
 
     for future in as_completed(futures):
 
-        result = future.result()
+        try:
 
-        all_rows.extend(result)
+            result = future.result()
 
+            all_rows.extend(result)
+
+        except Exception as e:
+
+            print(
+                f"Worker failure: {e}"
+            )
 
 
 # ==========================================================
 # Write Excel
 # ==========================================================
+
+print()
+print("Writing Excel...")
+
 
 wb = Workbook()
 
@@ -282,9 +400,13 @@ ws.append(headers)
 
 
 for row in all_rows:
+
     ws.append(row)
 
 
+# ==========================================================
+# Column widths
+# ==========================================================
 
 for column in ws.columns:
 
@@ -296,12 +418,19 @@ for column in ws.columns:
     )
 
     ws.column_dimensions[
-        get_column_letter(column[0].column)
+        get_column_letter(
+            column[0].column
+        )
     ].width = length + 3
 
 
+# ==========================================================
+# Metadata
+# ==========================================================
 
-meta = wb.create_sheet("Metadata")
+meta = wb.create_sheet(
+    "Metadata"
+)
 
 meta.append([
     "Generated",
@@ -314,10 +443,29 @@ meta.append([
 ])
 
 meta.append([
+    "Account/Region Scans",
+    total_tasks
+])
+
+meta.append([
+    "Successful Role Sessions",
+    len(account_sessions)
+])
+
+meta.append([
+    "Workers",
+    MAX_WORKERS
+])
+
+meta.append([
     "Regions",
     ",".join(REGIONS)
 ])
 
+
+# ==========================================================
+# Save
+# ==========================================================
 
 wb.save(
     OUTPUT_FILE
