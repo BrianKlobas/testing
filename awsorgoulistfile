@@ -1,0 +1,350 @@
+import re
+import boto3
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from botocore.exceptions import ClientError
+
+
+def sanitize_sheet_title(name: str, existing_titles: set) -> str:
+    """Sanitize and deduplicate Excel worksheet names (max 31 chars, no invalid chars)."""
+    # Remove characters disallowed by Excel: : \ / ? * [ ]
+    cleaned = re.sub(r'[:\\/?*\[\]]', '_', name).strip()
+    if not cleaned:
+        cleaned = "Sheet"
+    base = cleaned[:31]
+    candidate = base
+    counter = 1
+    while candidate.lower() in {t.lower() for t in existing_titles}:
+        suffix = f"_{counter}"
+        candidate = f"{base[:31 - len(suffix)]}{suffix}"
+        counter += 1
+    existing_titles.add(candidate)
+    return candidate
+
+
+def get_tags(org_client, resource_id: str) -> dict:
+    """Fetch all tags for a given AWS Organizations resource (Account, OU, Root)."""
+    tags = {}
+    paginator = org_client.get_paginator("list_tags_for_resource")
+    try:
+        for page in paginator.paginate(ResourceId=resource_id):
+            for tag in page.get("Tags", []):
+                tags[tag["Key"]] = tag["Value"]
+    except ClientError as e:
+        tags["_TagFetchError"] = e.response["Error"]["Code"]
+    return tags
+
+
+def list_children_ids(org_client, parent_id: str, child_type: str) -> list:
+    """Return all child IDs of a given type ('ORGANIZATIONAL_UNIT' or 'ACCOUNT')."""
+    child_ids = []
+    paginator = org_client.get_paginator("list_children")
+    for page in paginator.paginate(ParentId=parent_id, ChildType=child_type):
+        for child in page.get("Children", []):
+            child_ids.append(child["Id"])
+    return child_ids
+
+
+def get_ou_details(org_client, ou_id: str) -> dict:
+    """Fetch metadata and tags for an Organizational Unit."""
+    resp = org_client.describe_organizational_unit(OrganizationalUnitId=ou_id)
+    ou = resp["OrganizationalUnit"]
+    return {
+        "ResourceType": "OU",
+        "Id": ou["Id"],
+        "Name": ou["Name"],
+        "Arn": ou["Arn"],
+        "Email": "",
+        "Status": "ACTIVE",
+        "JoinedMethod": "",
+        "JoinedTimestamp": "",
+        "Tags": get_tags(org_client, ou["Id"]),
+    }
+
+
+def get_account_details(org_client, account_id: str) -> dict:
+    """Fetch metadata and tags for an AWS Account."""
+    resp = org_client.describe_account(AccountId=account_id)
+    acct = resp["Account"]
+    joined_ts = acct.get("JoinedTimestamp")
+    return {
+        "ResourceType": "Account",
+        "Id": acct["Id"],
+        "Name": acct["Name"],
+        "Arn": acct["Arn"],
+        "Email": acct.get("Email", ""),
+        "Status": acct.get("Status", ""),
+        "JoinedMethod": acct.get("JoinedMethod", ""),
+        "JoinedTimestamp": joined_ts.strftime("%Y-%m-%d %H:%M:%S UTC") if joined_ts else "",
+        "Tags": get_tags(org_client, acct["Id"]),
+    }
+
+
+def crawl_ou_tree(org_client, parent_id: str, path_parts: list, rows: list):
+    """Recursively traverse OUs and Accounts under a parent node."""
+    # 1. Accounts directly attached to this parent
+    account_ids = list_children_ids(org_client, parent_id, "ACCOUNT")
+    accounts = [get_account_details(org_client, aid) for aid in account_ids]
+    accounts.sort(key=lambda x: x["Name"].lower())
+
+    for acct in accounts:
+        acct["Depth"] = len(path_parts)
+        acct["HierarchyPath"] = " / ".join(path_parts + [acct["Name"]])
+        acct["ParentId"] = parent_id
+        rows.append(acct)
+
+    # 2. Child OUs under this parent
+    ou_ids = list_children_ids(org_client, parent_id, "ORGANIZATIONAL_UNIT")
+    ous = [get_ou_details(org_client, oid) for oid in ou_ids]
+    ous.sort(key=lambda x: x["Name"].lower())
+
+    for ou in ous:
+        current_path = path_parts + [ou["Name"]]
+        ou["Depth"] = len(path_parts)
+        ou["HierarchyPath"] = " / ".join(current_path)
+        ou["ParentId"] = parent_id
+        rows.append(ou)
+        # Recurse into child OU
+        crawl_ou_tree(org_client, ou["Id"], current_path, rows)
+
+
+def style_worksheet(ws, rows: list, tag_keys: list):
+    """Apply clean formatting, auto-widths, filters, and frozen headers to a worksheet."""
+    base_headers = [
+        "Hierarchy Path",
+        "Depth",
+        "Resource Type",
+        "Name",
+        "ID",
+        "Email",
+        "Status",
+        "Joined Method",
+        "Joined Timestamp",
+        "Parent ID",
+        "ARN",
+        "All Tags (Summary)",
+    ]
+    tag_headers = [f"Tag: {k}" for k in tag_keys]
+    headers = base_headers + tag_headers
+
+    # Styling definitions
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    ou_fill = PatternFill(start_color="E9EDF4", end_color="E9EDF4", fill_type="solid")
+    ou_font = Font(name="Calibri", size=10, bold=True, color="1F4E78")
+    acct_font = Font(name="Calibri", size=10, bold=False, color="000000")
+    zebra_fill = PatternFill(start_color="F9FAFC", end_color="F9FAFC", fill_type="solid")
+
+    thin_side = Side(border_style="thin", color="D9D9D9")
+    border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    # Write header row
+    ws.append(headers)
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        cell.border = border
+    ws.row_dimensions[1].height = 24
+
+    # Write data rows
+    for row_idx, item in enumerate(rows, start=2):
+        tags_dict = item.get("Tags", {})
+        tags_summary = ", ".join(f"{k}={v}" for k, v in sorted(tags_dict.items()))
+
+        # Indent the Hierarchy Path visually based on depth
+        indent = "    " * item.get("Depth", 0)
+        display_path = f"{indent}{item['HierarchyPath']}"
+
+        row_values = [
+            display_path,
+            item.get("Depth", 0),
+            item["ResourceType"],
+            item["Name"],
+            item["Id"],
+            item["Email"],
+            item["Status"],
+            item["JoinedMethod"],
+            item["JoinedTimestamp"],
+            item.get("ParentId", ""),
+            item["Arn"],
+            tags_summary,
+        ] + [tags_dict.get(k, "") for k in tag_keys]
+
+        ws.append(row_values)
+
+        is_ou = item["ResourceType"] == "OU"
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.border = border
+            cell.alignment = Alignment(vertical="center", wrap_text=False)
+            if is_ou:
+                cell.fill = ou_fill
+                cell.font = ou_font
+            else:
+                cell.font = acct_font
+                if row_idx % 2 == 1:
+                    cell.fill = zebra_fill
+
+    # Freeze top row & enable auto-filter
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(len(rows) + 1, 1)}"
+
+    # Auto-adjust column widths
+    for col_idx, header in enumerate(headers, start=1):
+        col_letter = get_column_letter(col_idx)
+        max_len = len(str(header))
+        for r in range(2, len(rows) + 2):
+            val = ws.cell(row=r, column=col_idx).value
+            if val is not None:
+                max_len = max(max_len, len(str(val)))
+        ws.column_dimensions[col_letter].width = min(max_len + 4, 60)
+
+
+def export_aws_org_to_excel(output_filename: str = "aws_organization_inventory.xlsx"):
+    # Organizations API endpoints live in us-east-1
+    org = boto3.client("organizations", region_name="us-east-1")
+
+    # Fetch Organization & Root info
+    org_info = org.describe_organization()["Organization"]
+    roots = org.list_roots()["Roots"]
+    if not roots:
+        raise RuntimeError("No Organization Roots found.")
+    root = roots[0]
+    root_id = root["Id"]
+    root_name = root["Name"]
+
+    print(f"Scanning AWS Organization: {org_info['Id']} (Management Account: {org_info['MasterAccountId']})")
+
+    # Gather Top-Level OUs and Accounts directly under Root
+    top_ou_ids = list_children_ids(org, root_id, "ORGANIZATIONAL_UNIT")
+    top_ous = [get_ou_details(org, oid) for oid in top_ou_ids]
+    top_ous.sort(key=lambda x: x["Name"].lower())
+
+    root_acct_ids = list_children_ids(org, root_id, "ACCOUNT")
+    root_accounts = [get_account_details(org, aid) for aid in root_acct_ids]
+    root_accounts.sort(key=lambda x: x["Name"].lower())
+
+    # Build dataset per top-level section
+    sections = []  # List of tuples: (SheetTitle, rows_list)
+    all_rows_global = []
+
+    # 1. Accounts directly under Root (if any)
+    if root_accounts:
+        root_rows = []
+        for acct in root_accounts:
+            acct["Depth"] = 0
+            acct["HierarchyPath"] = f"{root_name} / {acct['Name']}"
+            acct["ParentId"] = root_id
+            root_rows.append(acct)
+        sections.append(("Root Accounts", root_rows))
+        all_rows_global.extend(root_rows)
+
+    # 2. Each Top-Level OU gets its own sheet
+    for top_ou in top_ous:
+        ou_rows = []
+        top_ou["Depth"] = 0
+        top_ou["HierarchyPath"] = top_ou["Name"]
+        top_ou["ParentId"] = root_id
+        ou_rows.append(top_ou)
+
+        crawl_ou_tree(org, top_ou["Id"], [top_ou["Name"]], ou_rows)
+        sections.append((top_ou["Name"], ou_rows))
+        all_rows_global.extend(ou_rows)
+
+    # Create Excel Workbook
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # Remove default blank sheet
+    used_sheet_names = set()
+
+    # Overview / Summary Tab first
+    overview_ws = wb.create_sheet(title=sanitize_sheet_title("Org Overview", used_sheet_names))
+    overview_headers = [
+        "Section / Top-Level OU",
+        "OU ID",
+        "Sub-OUs Count",
+        "Accounts Count",
+        "Active Accounts",
+        "Suspended Accounts",
+        "Tags",
+    ]
+    overview_ws.append(overview_headers)
+
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    thin_side = Side(border_style="thin", color="D9D9D9")
+    border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    for col_idx in range(1, len(overview_headers) + 1):
+        c = overview_ws.cell(row=1, column=col_idx)
+        c.fill = header_fill
+        c.font = header_font
+        c.border = border
+    overview_ws.row_dimensions[1].height = 24
+
+    for idx, (sec_name, sec_rows) in enumerate(sections, start=2):
+        sub_ous = [r for r in sec_rows if r["ResourceType"] == "OU" and r["Depth"] > 0]
+        accts = [r for r in sec_rows if r["ResourceType"] == "Account"]
+        active_accts = sum(1 for a in accts if a["Status"] == "ACTIVE")
+        suspended_accts = sum(1 for a in accts if a["Status"] != "ACTIVE")
+
+        top_item = sec_rows[0]
+        ou_id = top_item["Id"] if top_item["ResourceType"] == "OU" else root_id
+        tags_str = (
+            ", ".join(f"{k}={v}" for k, v in sorted(top_item.get("Tags", {}).items()))
+            if top_item["ResourceType"] == "OU"
+            else ""
+        )
+
+        overview_ws.append([
+            sec_name,
+            ou_id,
+            len(sub_ous),
+            len(accts),
+            active_accts,
+            suspended_accts,
+            tags_str,
+        ])
+        for col_idx in range(1, len(overview_headers) + 1):
+            overview_ws.cell(row=idx, column=col_idx).border = border
+
+    # Add Totals Row to Overview
+    total_row_idx = len(sections) + 2
+    overview_ws.append([
+        "TOTAL",
+        org_info["Id"],
+        f"=SUM(C2:C{total_row_idx - 1})",
+        f"=SUM(D2:D{total_row_idx - 1})",
+        f"=SUM(E2:E{total_row_idx - 1})",
+        f"=SUM(F2:F{total_row_idx - 1})",
+        "",
+    ])
+    for col_idx in range(1, len(overview_headers) + 1):
+        c = overview_ws.cell(row=total_row_idx, column=col_idx)
+        c.font = Font(name="Calibri", size=11, bold=True)
+        c.border = border
+
+    overview_ws.freeze_panes = "A2"
+    for col_idx, header in enumerate(overview_headers, start=1):
+        col_letter = get_column_letter(col_idx)
+        max_len = max(
+            len(str(header)),
+            *(len(str(overview_ws.cell(row=r, column=col_idx).value or "")) for r in range(2, total_row_idx + 1)),
+        )
+        overview_ws.column_dimensions[col_letter].width = min(max_len + 4, 55)
+
+    # Create a dedicated tab for each Top-Level OU (and Root Accounts if present)
+    for sec_name, sec_rows in sections:
+        sheet_title = sanitize_sheet_title(sec_name, used_sheet_names)
+        ws = wb.create_sheet(title=sheet_title)
+        sec_tag_keys = sorted({k for r in sec_rows for k in r.get("Tags", {}).keys()})
+        style_worksheet(ws, sec_rows, sec_tag_keys)
+
+    wb.save(output_filename)
+    print(f"Successfully exported AWS Organization inventory to '{output_filename}'")
+
+
+if __name__ == "__main__":
+    export_aws_org_to_excel("aws_organization_inventory.xlsx")
