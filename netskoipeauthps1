@@ -1,0 +1,95 @@
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+
+function Find-ByNamePattern {
+    param(
+        [System.Windows.Automation.AutomationElement]$Parent,
+        [string]$Pattern
+    )
+    $all = $Parent.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+    )
+    foreach ($el in $all) {
+        if ($el.Current.Name -match $Pattern) {
+            return $el
+        }
+    }
+    return $null
+}
+
+function Invoke-Element {
+    param([System.Windows.Automation.AutomationElement]$Element)
+    $invokePattern = $null
+    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invokePattern)) {
+        $invokePattern.Invoke()
+        return $true
+    }
+    return $false
+}
+
+# 1. Locate the Windows Taskbar
+$taskbar = $root.FindFirst(
+    [System.Windows.Automation.TreeScope]::Children,
+    (New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ClassNameProperty, "Shell_TrayWnd"
+    ))
+)
+
+if (-not $taskbar) {
+    Write-Warning "Could not locate the Windows Taskbar."
+    exit 1
+}
+
+# 2. Look for the Netskope icon directly on the visible taskbar
+$netskopeIcon = Find-ByNamePattern -Parent $taskbar -Pattern "Netskope"
+
+# 3. If not visible, expand the "Show Hidden Icons" overflow chevron and search there
+if (-not $netskopeIcon) {
+    $chevron = Find-ByNamePattern -Parent $taskbar -Pattern "Show Hidden Icons|Notification Chevron"
+    if ($chevron -and (Invoke-Element -Element $chevron)) {
+        Start-Sleep -Milliseconds 400
+        $overflow = $root.FindFirst(
+            [System.Windows.Automation.TreeScope]::Children,
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ClassNameProperty, "NotifyIconOverflowWindow"
+            ))
+        )
+        # Windows 11 uses a different class name for the overflow flyout
+        if (-not $overflow) {
+            $overflow = $root.FindFirst(
+                [System.Windows.Automation.TreeScope]::Children,
+                (New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ClassNameProperty, "TopLevelWindowForOverflowXamlIsland"
+                ))
+            )
+        }
+        if ($overflow) {
+            $netskopeIcon = Find-ByNamePattern -Parent $overflow -Pattern "Netskope"
+        }
+    }
+}
+
+if (-not $netskopeIcon) {
+    Write-Warning "Netskope Client tray icon was not found. Ensure Netskope Client is running."
+    exit 1
+}
+
+# 4. Click/Invoke the Netskope tray icon to open its context menu
+if (-not (Invoke-Element -Element $netskopeIcon)) {
+    Write-Warning "Found Netskope icon, but could not invoke it."
+    exit 1
+}
+
+Start-Sleep -Milliseconds 500
+
+# 5. Find and click the "Re-authenticate" menu item
+$reauthItem = Find-ByNamePattern -Parent $root -Pattern "Re-authenticate"
+
+if ($reauthItem -and (Invoke-Element -Element $reauthItem)) {
+    Write-Output "Triggered Netskope Re-authentication."
+} else {
+    Write-Warning "Could not find or click 'Re-authenticate' in the Netskope menu."
+}
