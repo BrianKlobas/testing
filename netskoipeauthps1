@@ -57,7 +57,7 @@ if (-not $netskopeIcon) {
                 [System.Windows.Automation.AutomationElement]::ClassNameProperty, "NotifyIconOverflowWindow"
             ))
         )
-        # Windows 11 uses a different class name for the overflow flyout
+        # Windows 11 overflow flyout class
         if (-not $overflow) {
             $overflow = $root.FindFirst(
                 [System.Windows.Automation.TreeScope]::Children,
@@ -77,19 +77,8 @@ if (-not $netskopeIcon) {
     exit 1
 }
 
-# 4. Click/Invoke the Netskope tray icon to open its context menu
+# 4. Open the Netskope tray menu
 if (-not (Invoke-Element -Element $netskopeIcon)) {
-    Write-Warning "Found Netskope icon, but could not invoke it."
+    Write-Warning "Found Netskope icon, but could not open its menu."
     exit 1
-}
-
-Start-Sleep -Milliseconds 500
-
-# 5. Find and click the "Re-authenticate" menu item
-$reauthItem = Find-ByNamePattern -Parent $root -Pattern "Re-authenticate"
-
-if ($reauthItem -and (Invoke-Element -Element $reauthItem)) {
-    Write-Output "Triggered Netskope Re-authentication."
-} else {
-    Write-Warning "Could not find or click 'Re-authenticate' in the Netskope menu."
 }
